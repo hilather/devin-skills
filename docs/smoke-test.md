@@ -38,7 +38,7 @@ Implement the tiny change.
 ## 4. Stop blocked — then `/skeptic-review`
 
 - [ ] Stop / "I'm done" **without** `/skeptic-review` → **blocked** (`Stop blocked: no code-skeptic marker…`).
-- [ ] Retry Stop twice more on the **same** turn: 1st and 2nd still block; 3rd is **allowed** (loop guard). Observe this, then do not rely on it for real work — `/gate-bypass` is the honest skip.
+- [ ] On the **same** turn, Stop 1–3 still block (`block N/3`); Stop 4 is **allowed** (loop guard). Observe this, then do not rely on it — `/gate-bypass` is the honest skip.
 - [ ] Fresh session (or after `/skeptic-plan` + implement): `/skeptic-review` on the frozen candidate → `code-passed` → Stop **allowed**.
 
 ## 5. Bypass and forge

@@ -119,7 +119,7 @@ Uninstall drops only `devin-gates.py` elements. herdr remains.
 | `/gate-bypass <reason>` | This session | HMAC `override_reason`; audited. Reason is required. |
 | `DEVIN_GATES_OFF=1` | Process tree of the shell that **starts** `devin` | Hook `os.environ` only. `tool_input.env.DEVIN_GATES_OFF` does **not** unlock. |
 | `sh uninstall.sh` | Structural off | Does not delete state unless `--purge`. |
-| Builtin `/bypass` / `/yolo` / `/dangerous` | Devin **permission mode** | **Not** a gate override. Hooks may still fire (unverified — see smoke-test item 10). If a future Devin build skips PreToolUse in permission-bypass, the lock dies; treat that as "permission-bypass disables the lock." |
+| Builtin `/bypass` / `/yolo` / `/dangerous` | Devin **permission mode** | **Not** a gate override. Hooks may still fire (unverified — see [docs/smoke-test.md](docs/smoke-test.md) §8). If a future Devin build skips PreToolUse in permission-bypass, the lock dies; treat that as "permission-bypass disables the lock." |
 
 Dogfood gate-script changes with `/gate-bypass` or `DEVIN_GATES_OFF=1`, then re-run `install.sh` (copy + refresh hash). Do not edit the installed copy from a locked session.
 
