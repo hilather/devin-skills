@@ -1,23 +1,27 @@
 # Uninstall
 
-Removes only Devin Skills hook entries, the copied gate, our skill/agent symlinks, and the `AGENTS.md` span. **Never** touches `herdr-agent-state.sh` or herdr command strings.
+Removes Devin Skills hook entries, the copied gate, our skill/agent symlinks, and the `AGENTS.md` span. It **never** touches `herdr-agent-state.sh` or herdr command strings.
 
 ```sh
 sh uninstall.sh
-# drop secret + audit + session state as well:
+```
+
+Also drop the secret, audit log, and session state:
+
+```sh
 sh uninstall.sh --purge
 ```
 
 ## What it does
 
 1. Drops only `config.json` hook elements whose `command` contains `devin-gates.py`.
-2. Deletes an event key if its array is then empty (`PostCompaction` / `SessionEnd` go away if we created them). herdr’s six events stay.
-3. Removes the `<!-- devin-skills:begin -->` … `<!-- devin-skills:end -->` span from `$PREFIX/AGENTS.md`. Other content is kept; the file is deleted only if nothing remains.
-4. Removes `$PREFIX/hooks/devin-gates.py` (the copied file or a leftover symlink). Does not follow a symlink into the git repo and delete the source.
-5. Unlinks `$PREFIX/skills/<name>` and `$PREFIX/agents/<name>.md` only when they are symlinks to this repo. Leaves real files alone.
-6. `--purge` deletes `$STATE_DIR` (secret, `install-hash`, `source_realpath`, `audit.jsonl`, sessions). Without `--purge`, state is left in place.
+2. Deletes an event key if its array is then empty (`PostCompaction` / `SessionEnd` go away if we created them). herdr's events stay.
+3. Removes the `<!-- devin-skills:begin -->` … `<!-- devin-skills:end -->` span from `$PREFIX/AGENTS.md`. Other content is kept. The file is deleted only if nothing remains.
+4. Removes `$PREFIX/hooks/devin-gates.py` (the copied file or a leftover symlink). Does not follow a symlink into this git repo and delete the source.
+5. Unlinks `$PREFIX/skills/<name>` and `$PREFIX/agents/<name>.md` only when they are symlinks to this repo. Real files are left alone.
+6. `--purge` deletes the state directory (secret, `install-hash`, `source_realpath`, `audit.jsonl`, sessions). Without `--purge`, state is left in place so a reinstall can reuse the same secret.
 
-Idempotent: a second uninstall is a no-op success.
+A second uninstall is a no-op success.
 
 ## Flags
 
@@ -26,10 +30,10 @@ Idempotent: a second uninstall is a no-op success.
 | `--prefix DIR` | Same as install (default `~/.config/devin`) |
 | `--src DIR` | Repo root used to recognize our skill/agent symlinks |
 | `--project` | Also strip gate entries from `.devin/hooks.v1.json` in the current directory |
-| `--purge` | Delete `$STATE_DIR` |
+| `--purge` | Delete the state directory |
 | `--help` | Usage |
 
-State directory resolution matches install / `devin-gates.py`.
+State directory resolution matches [install.md](install.md#state-directory).
 
 ## If merge went wrong
 

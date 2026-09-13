@@ -1,162 +1,214 @@
-# Devin Skills
+<p align="center">
+  <img src="docs/assets/icon.png" width="128" alt="Devin Skills lock icon">
+</p>
 
-Layered design / plan-skeptic / code-skeptic workflow on Devin CLI extension points (verified on **3000.10.21**).
+<h1 align="center">Devin Skills</h1>
 
-**The product is the write-lock** in `hooks/devin-gates.py`. Skills are prompts; without the lock, Devin can ignore them and edit anyway. Markers are HMAC-signed and minted only by the gate script. Plugin packaging is optional and **must not** carry the lock (plugin hooks fail-open).
+<p align="center">
+  <strong>Grok-style skills with a real write-lock for the Devin CLI.</strong><br>
+  Don't implement until the plan survives.<br>
+  Don't claim done until the diff survives.
+</p>
 
-This repo is the source of truth. Install it into `~/.config/devin/` (or a project `.devin/`) with `install.sh`. Existing **herdr** hooks stay in place; the gate is merged beside them.
+<p align="center">
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-5eead4?style=for-the-badge&labelColor=0b1220" alt="MIT License"></a>
+  <a href="https://docs.devin.ai/cli"><img src="https://img.shields.io/badge/Devin%20CLI-3000.10.21-8b5cf6?style=for-the-badge&labelColor=0b1220" alt="Verified on Devin CLI 3000.10.21"></a>
+  <a href="https://www.python.org/"><img src="https://img.shields.io/badge/Python-3%20stdlib-22c55e?style=for-the-badge&labelColor=0b1220&logo=python&logoColor=white" alt="Python 3 stdlib"></a>
+  <a href="https://github.com/hilather/devin-skills/actions"><img src="https://img.shields.io/github/actions/workflow/status/hilather/devin-skills/test.yml?branch=main&style=for-the-badge&label=tests&labelColor=0b1220" alt="Tests"></a>
+</p>
 
-## What it is
+<p align="center">
+  <img src="docs/assets/banner.png" alt="Devin Skills — Grok-style skills. Real write-locks. For the Devin CLI." width="100%">
+</p>
 
-After Devin's built-in `/plan` is approved — and by default in any normal session — workspace writes stay blocked until a **plan-skeptic** marker exists. Stop ("I'm done") stays blocked until a **code-skeptic** marker exists, unless nothing mutated, an audited override is set, gates are off, or the Stop-loop guard fires.
+---
 
-Keep Devin's built-in `/plan`. **Do not** add a skill named `plan`. **Do not** ship `/goal`. Default is **locked**.
+## What this is
 
-| Layer | Role |
+[Devin CLI](https://docs.devin.ai/cli) is a local coding agent. You can give it skills (slash-command prompts) that *ask* it to plan, review, and be careful.
+
+Asking is not enough. A prompt cannot stop Devin from editing your files.
+
+**Devin Skills** ports the useful parts of a Grok Build workflow onto Devin, then adds the missing piece: a **lock**.
+
+After you install it, Devin cannot write to the workspace until a plan skeptic signs off, and it cannot say "I'm done" until a code skeptic signs off. The signatures are HMAC-signed by the gate script. Devin cannot mint them by writing `passed` into a file.
+
+Skills are the playbook. The lock is the product.
+
+## Why it exists
+
+Grok Build has skills **and** a harness that actually enforces them: plan first, independent skeptics, no "done" until the diff survives.
+
+Devin has skills, custom subagents, and hooks. Skills are prompts. Custom subagents are personas. Only **hooks** can return `decision: block`.
+
+This repo uses each layer for what it is good at:
+
+| Layer | What it does |
 | --- | --- |
-| Devin builtin `/plan` | Host read-only draft. Not our code. |
-| User/project hooks (`devin-gates.py`) | The only layer that can `decision: block`. Never in a plugin. |
-| Custom subagents | Read-only personas (`design-writer`, `design-reviewer`, `plan-skeptic`, `finding-skeptic`, `code-skeptic`), `model: swe-2-high`. |
-| Skills | Orchestrators and slash commands. Prompts only. |
-| Tiny `AGENTS.md` | Pointers, not playbooks. |
-| Optional `plugin/` | Skills + agents + the tiny rule for sharing. **No `hooks.json`.** |
+| Devin's built-in `/plan` | Read-only draft of the work. We do not replace it. |
+| `hooks/devin-gates.py` | The lock. Blocks writes and Stop until skeptics pass. |
+| Custom subagents | Read-only reviewers: plan-skeptic, code-skeptic, and friends. |
+| Skills | Slash commands that run the loops (`/design`, `/skeptic-plan`, `/skeptic-review`, …). |
+| Optional plugin | A shareable copy of the skills. **No lock.** |
+
+If you only install the plugin, you get nicer prompts and Devin can still edit anyway. Run `install.sh` if you want the lock.
+
+## How a session goes
+
+```mermaid
+flowchart TD
+  A[New Devin session] --> B[Writes are locked]
+  B --> C["/plan — draft the work"]
+  C --> D[You approve the plan]
+  D --> E["Still locked"]
+  E --> F["/skeptic-plan — independent skeptic attacks the plan"]
+  F -->|PASS| G[Writes unlock]
+  F -->|3 FAILs| X[BLOCKED — do not implement]
+  G --> H[Devin implements]
+  H --> I["Stop / I'm done is locked"]
+  I --> J["/skeptic-review — skeptics attack the diff"]
+  J -->|PASS| K[You can claim done]
+  J -->|3 FAILs| Y[BLOCKED — do not LGTM]
+  B --> Z["/gate-bypass with a reason — honest skip for tiny work"]
+  Z --> H
+```
+
+Default is **locked**, even if you never ran `/plan`. Tiny tasks skip the ceremony with `/gate-bypass <reason>` — a reason is required, and it is audited.
+
+## Install
+
+Needs [Devin CLI](https://docs.devin.ai/cli) and Python 3. No npm, no extra packages.
+
+```sh
+git clone https://github.com/hilather/devin-skills.git
+cd devin-skills
+sh install.sh
+```
+
+That installs to `~/.config/devin/`:
+
+- **Copies** the gate script (the lock is never a live symlink into this repo).
+- **Symlinks** the skills and agents so commands are `/design`, not `/devin-skills:design`.
+- **Merges** the hook beside existing [herdr](https://github.com/herdrdev/herdr) hooks. It does not replace your `config.json`.
+
+Then, in Devin:
+
+```
+/hooks
+```
+
+You should see both `herdr-agent-state.sh` (if you had it) and `devin-gates.py`.
+
+Full flags, project-local install, and what the script touches: **[docs/install.md](docs/install.md)**.
+
+Uninstall: **[docs/uninstall.md](docs/uninstall.md)**.
+
+## How to use it
+
+Everyday loop, in Devin:
+
+1. **`/plan`** the change. This is Devin's built-in planner. Approve it when it looks right. Approval does **not** unlock writes.
+2. **`/skeptic-plan`**. A fresh `plan-skeptic` subagent tries to break the plan (wrong assumptions, missing steps, unverified claims). Writes unlock only on `GATES_VERDICT: PASS`.
+3. **Implement.** Devin can edit now.
+4. **`/skeptic-review`**. A finding-skeptic, then a code-skeptic, review a frozen diff. Stop unlocks only on a code-skeptic PASS.
+
+Optional: **`/design`** before `/plan` when you want a design doc with a PR plan and key decisions.
+
+Check the lock any time:
+
+```
+/gate-status
+```
+
+A one-line typo, a docs tweak, a test you need before the skeptic:
+
+```
+/gate-bypass tiny typo in README
+```
+
+New session? Locked again. Bypass is per-session.
+
+Step-by-step with examples: **[docs/usage.md](docs/usage.md)**.
 
 ## Commands
 
 | Command | What it does |
 | --- | --- |
-| `/plan` | **Builtin.** Read-only draft (`write_plan`, approval UI, `exit_plan_mode`). Do **not** name a skill `plan`. |
-| `/design` | Writer/reviewer loop. Parent is the only writer (artifacts under `design_allow_root`). Mandatory PR Plan and Key Decisions. |
-| `/skeptic-plan` | Fresh `plan-skeptic` sweeps until `GATES_VERDICT: PASS` (or BLOCKED after 3 FAIL sweeps). Lifts the write-lock. |
-| `/skeptic-review` | Finding-skeptic then code-skeptic on a frozen diff. Lifts the Stop-lock. Requires `plan-passed`. |
-| `/gate-bypass` | Audited per-session override. **Requires a reason.** Not Devin's builtin `/bypass` / `/yolo` / `/dangerous`. |
-| `/gate-status` | Print markers, witnesses, sweeps, override. Read-only. |
+| `/plan` | **Built into Devin.** Read-only draft. Do not add a skill named `plan`. |
+| `/design` | Writer/reviewer loop. Produces a design doc with **Key Decisions** and a **PR Plan**. |
+| `/skeptic-plan` | Independent plan skeptic. Lifts the **write-lock** on PASS. |
+| `/skeptic-review` | Finding-skeptic, then code-skeptic, on a frozen diff. Lifts the **Stop-lock** on PASS. Needs a passed plan first. |
+| `/gate-bypass <reason>` | Audited skip for this session. Reason is required. Not Devin's `/bypass` / `/yolo`. |
+| `/gate-status` | Print lock state. Read-only. |
 
-There is **no** `/goal` and **no** skill named `plan`. Builtin `/ask`, `/loop`, and `/bypass` are Devin's; do not ship colliding skills.
+There is **no** `/goal`. Grok's goal harness is host logic Devin does not have. Faking it with a prompt would look like the real thing and fail silently. See [What we did not copy](docs/how-it-works.md#what-we-did-not-copy).
 
-## Grok → Devin mapping
+## Bypass
 
-| Grok | Devin approximation | Honest gap |
+| Mechanism | Scope | When to use it |
 | --- | --- | --- |
-| `/plan` harness: read-only except plan file; `enter_plan_mode` / `exit_plan_mode`; approval UI; `/view-plan` | **Keep built-in `/plan`.** Hooks take over **after** approval until a skeptic marker exists. | No `/view-plan` skill. Devin's plan file lives under `~/.devin/plans/`, not Grok's session `plan.md`. We do not replace the approval UI. |
-| `/design` writer/reviewer/`resume_from` | Orchestrator skill + read-only `design-writer` / `design-reviewer`. Parent copies fenced markdown onto `design_allow_root`. `resume` for revise / re-review. | Parent sees a distilled result, not the raw transcript. v1 does **not** assume child `write` re-enters hooks. |
-| `/goal` (host rounds, pause/resume/clear, token budget, independent evidence review) | **v1 non-goal. Do not ship `/goal`.** Closest honest pieces already in v1: builtin `/plan` + write-lock until plan-skeptic PASS + Stop-lock until code-skeptic PASS. | Grok `/goal` is **host** logic. Devin has none of that. A skill named `/goal` would be a prompt saying "keep going" that *looks* like Grok `/goal` and fails silently. See [Goal harness: not approximated](#goal-harness-not-approximated). |
-| Plan skeptic before implement (3-sweep cap, BLOCKED, failed-sweep autopsy) | `/skeptic-plan` + `plan-skeptic` + **write-lock hook**. Fresh subagent per sweep. Lock lifts only on `GATES_VERDICT: PASS`. | Hook cannot run the skeptic (timeouts). A parent that jailbreaks the skeptic via the task prompt can still produce PASS. Residual, documented. |
-| Code skeptic at done (finding-skeptic + implementation sweep, kick-back vs ordinary) | `/skeptic-review` + `finding-skeptic` + `code-skeptic` + **Stop hook**. Auto-mint requires a `code-skeptic` PASS whose witness `source_seq` is ≥ current `source_seq`. | Same residual. Stop-loop guard is required (High for the Stop claim). Parent must embed the **full** `git diff` in the task; large diffs may truncate. |
-| Independent skeptic (fresh, no attachment) | Fresh Devin subagent per sweep; parent must not self-review. Profiles omit write/edit/`exec`. | Parent still writes the task prompt (jailbreak residual) **and** the pasted diff. |
+| `/gate-bypass <reason>` | This session | Tiny work. Reason required. Audited. |
+| `DEVIN_GATES_OFF=1` | Process tree of the shell that **starts** `devin` | Dogfooding the gate itself. Setting it on a tool call does **not** unlock. |
+| `sh uninstall.sh` | Until you reinstall | Take the lock off this machine. |
+| Devin `/bypass` / `/yolo` / `/dangerous` | Devin permission mode | **Not** a gate override. Hooks may still fire. |
 
-## Goal harness: not approximated
+`echo passed > marker` does not unlock. Minting happens only inside the gate script.
 
-**Do not ship a skill named `/goal`.** Grok `/goal` is host logic, not a prompt: token budget, pause/resume/clear, autonomous multi-round driver, and an independent evidence review that can **refuse** completion.
+## herdr
 
-Devin CLI 3000.10.21 exposes **none** of that. A skill named `/goal` would only say "keep going until you think you are done." The parent would mark itself complete. That would *look* like Grok `/goal` and fail silently — worse than an honest non-goal.
+If you already use herdr, keep it. `install.sh` appends the gate beside those hooks and leaves herdr command strings byte-identical. Uninstall removes only the gate. Details in [docs/install.md](docs/install.md#herdr).
 
-The durable part of a goal on this stack is already here, without faking the harness:
+## Optional plugin
 
-- builtin `/plan` (read-only draft);
-- write-lock until a **plan-skeptic PASS**;
-- Stop-lock until a **code-skeptic PASS** (with `source_seq` so a later edit cannot remint).
-
-That is "don't implement until the plan survives; don't claim done until the diff survives."
-
-## Default is locked
-
-Sessions that never used `/plan` are still locked. Small tasks use `/gate-bypass <reason>` or `DEVIN_GATES_OFF=1`. Bypass is explicit.
-
-Stop is allowed without a code-skeptic marker only when:
-
-- `mode == plan` (from `write_plan`, cleared on `exit_plan_mode` — **not** parsed from prompt text);
-- `source_seq == 0` (no successful source mutations);
-- an audited `/gate-bypass` override;
-- `DEVIN_GATES_OFF=1` in the **shell that starts `devin`**;
-- or this `prompt_id` has already been Stop-blocked 3 times (loop guard). After 3, the turn is allowed to end. That residual is **High** for the Stop product claim. The honest skip for real work is `/gate-bypass`, not Stop-retry.
-
-`echo passed > marker` does not unlock. Minting happens only from the gate script, HMAC-signed with a secret the agent cannot write.
-
-## Install
-
-Preferred path is **user-level** `install.sh`: symlink skills/agents so slash commands are `/design` (not `/devin-skills:design`); **copy** the gate script (the lock must not be a live symlink into a writable repo).
-
-See **[docs/install.md](docs/install.md)** (and **[docs/uninstall.md](docs/uninstall.md)**).
-
-```sh
-sh install.sh
-# or:
-sh install.sh --prefix ~/.config/devin --src /path/to/devin-skills
-```
-
-After install, in Devin run `/hooks` and confirm both `herdr-agent-state.sh` and `devin-gates.py` are listed.
-
-Python 3 stdlib and POSIX `sh` only. No npm packages, crates, or frameworks.
-
-```sh
-python3 -m unittest tests.test_install_merge tests.test_gate -v
-```
-
-Live Devin checklist (optional): **[docs/smoke-test.md](docs/smoke-test.md)**.
-
-Keep `~/git/agent-skills` cloned for hunt lists; `sh scripts/refresh-vendor.sh` after hint updates. Fallback: `vendor/agent-hints/`.
-
-## herdr coexistence
-
-`~/.config/devin/config.json` already wires `herdr-agent-state.sh` on several events. Those hooks report pane/session identity and **always exit 0**. Replacing that file would break herdr.
-
-`install.sh`:
-
-- Backs up `config.json` to `config.json.bak-devin-skills-<timestamp>`.
-- Appends **one** gate dispatcher per event (`matcher: ""`, `devin-gates.py hook`) iff that event does not already have a `devin-gates.py` command.
-- Creates `PostCompaction` and `SessionEnd` if missing.
-- Leaves herdr command strings **byte-identical**. herdr stays first.
-- Does **not** add a gate hook on `PermissionRequest` (herdr stays the only one there).
-- Never edits `herdr-agent-state.sh`.
-
-Uninstall drops only `devin-gates.py` elements. herdr remains.
-
-## Bypass and `DEVIN_GATES_OFF`
-
-| Mechanism | Scope | Notes |
-| --- | --- | --- |
-| `/gate-bypass <reason>` | This session | HMAC `override_reason`; audited. Reason is required. |
-| `DEVIN_GATES_OFF=1` | Process tree of the shell that **starts** `devin` | Hook `os.environ` only. `tool_input.env.DEVIN_GATES_OFF` does **not** unlock. |
-| `sh uninstall.sh` | Structural off | Does not delete state unless `--purge`. |
-| Builtin `/bypass` / `/yolo` / `/dangerous` | Devin **permission mode** | **Not** a gate override. Hooks may still fire (unverified — see [docs/smoke-test.md](docs/smoke-test.md) §8). If a future Devin build skips PreToolUse in permission-bypass, the lock dies; treat that as "permission-bypass disables the lock." |
-
-Dogfood gate-script changes with `/gate-bypass` or `DEVIN_GATES_OFF=1`, then re-run `install.sh` (copy + refresh hash). Do not edit the installed copy from a locked session.
-
-## Optional plugin (no hooks)
-
-`plugin/` packs skills, agents, and the tiny rule for sharing. It is **not** the install default.
+Skills without the lock, for sharing:
 
 ```sh
 devin plugins install --local /path/to/devin-skills/plugin
 ```
 
-That namespaces commands as `/devin-skills:design` (and plugin subagents as `devin-skills:plan-skeptic`). The skills in this repo spawn un-namespaced profiles (`plan-skeptic`, …). **User-level `install.sh` remains the path that actually locks writes.**
+Commands become `/devin-skills:design` instead of `/design`. Plugin hooks fail-open, so this folder has **no** `hooks.json`. User-level `install.sh` is still how writes actually get locked.
 
-**Do not put hooks in the plugin.** Plugin hooks are documented as best-effort and fail-open — if a hook fails to load, the session continues without it. There is **no** `plugin/hooks.json`. The write-lock lives only in user `~/.config/devin/config.json` and/or project `.devin/hooks.v1.json`.
+## Tests
 
-`plugin/skills/` and `plugin/agents/` are copies of the repo trees. If they drift, recopy (`cp -a skills agents plugin/` and `cp rules/AGENTS.md plugin/AGENTS.md`) or ignore the plugin and use `install.sh`.
+Python 3 stdlib only:
 
-## Honest residuals
+```sh
+python3 -m unittest tests.test_install_merge tests.test_gate -v
+```
 
-- Parent jailbreak: the parent writes the skeptic `task`. Instructing PASS can still mint. The lock verified that the profile emitted PASS, not that the plan/diff is independently good.
-- Stop-loop cap of 3 per `prompt_id` is required (Devin can loop on blocking Stop) and is a **High** residual for the Stop claim.
-- Large diffs may truncate in the pasted `task`.
-- `apply_patch` schema on 3000.10.21 is not fully known: fail closed while locked; after unlock, fail open except a protected-path scan.
-- Custom subagents are experimental; pin Devin 3000.10.21 in mind when the format moves.
+Live Devin checklist (throwaway repo): **[docs/smoke-test.md](docs/smoke-test.md)**.
+
+## Docs
+
+| Doc | What's in it |
+| --- | --- |
+| [docs/usage.md](docs/usage.md) | Everyday workflow, commands, bypass, FAQ |
+| [docs/install.md](docs/install.md) | Install, flags, herdr, project mode |
+| [docs/uninstall.md](docs/uninstall.md) | Clean removal and backup restore |
+| [docs/how-it-works.md](docs/how-it-works.md) | Layers, Grok mapping, honest limits |
+| [docs/smoke-test.md](docs/smoke-test.md) | Live Devin verification checklist |
 
 ## Layout
 
 ```
-hooks/devin-gates.py     # THE product
-hooks/hook-entries.json  # dispatcher JSON; install.sh merges this
+hooks/devin-gates.py     # the lock
+hooks/hook-entries.json  # what install.sh merges into config.json
 install.sh / uninstall.sh
 skills/                  # /design /skeptic-plan /skeptic-review /gate-bypass /gate-status
 agents/                  # five read-only personas
-rules/AGENTS.md          # < 20 lines; pointers only
-docs/install.md
-docs/uninstall.md
-docs/smoke-test.md
-plugin/                  # optional; no hooks.json
+rules/AGENTS.md          # short pointers, not a playbook
+docs/                    # this documentation
+plugin/                  # optional share pack — no hooks
 tests/                   # unittest; no live Devin required
+vendor/agent-hints/      # vendored hunt lists for the skeptics
 ```
+
+## Honest limits
+
+The lock proves that the skeptic **profile** emitted PASS. It cannot prove the parent did not jailbreak the skeptic's task prompt. Large diffs may truncate when pasted. Stop is allowed after three blocked attempts on the same prompt so Devin cannot loop forever — that is a known gap; `/gate-bypass` is the honest skip.
+
+The full list lives in [docs/how-it-works.md](docs/how-it-works.md#honest-limits).
+
+## License
+
+[MIT](LICENSE).
