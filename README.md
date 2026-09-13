@@ -101,7 +101,26 @@ flowchart TD
   L --> M["Then /plan as usual"]
 ```
 
-The doc must include **Key Decisions** and a **PR Plan**. Details: **[docs/usage.md](docs/usage.md#design-docs)**.
+The doc must include **Key Decisions** and a **PR Plan**. `/design` **writes** that execution plan. It does **not** run it.
+
+### After design: implement the PR Plan
+
+The PR Plan is ordered, independently mergeable slices (`### PR 1:`, files, dependencies, description). A later execute path can parse that shape — there is no skill that walks it for you. Devin's built-in `/plan` is the implementation planner. Feed it one slice at a time (or the whole spec, if the change is small).
+
+```mermaid
+flowchart TD
+  A["/design finished — PR Plan on disk"] --> B[Pick the next unmerged PR]
+  B --> C["/plan that slice — paste the spec"]
+  C --> D[You approve]
+  D --> E["/skeptic-plan"]
+  E -->|PASS| F[Implement that PR]
+  F --> G["/skeptic-review"]
+  G -->|PASS| H{More PRs?}
+  H -->|yes| B
+  H -->|no| I[Done]
+```
+
+Do not add a skill named `plan`. Do not invent a `/goal` that "just keeps going" through the PR list — Devin has no host harness for that. Details: **[docs/usage.md](docs/usage.md#from-design-to-implementation)**.
 
 ## Install
 
@@ -140,7 +159,7 @@ Everyday loop, in Devin:
 3. **Implement.** Devin can edit now.
 4. **`/skeptic-review`**. A finding-skeptic, then a code-skeptic, review a frozen diff. Stop unlocks only on a code-skeptic PASS.
 
-Optional: **`/design`** before `/plan` when you want a design doc with a PR plan and key decisions.
+Optional: **`/design`** before `/plan` when you want a spec. That skill's output is the **PR Plan** — the execution plan. It does not implement. Take each `### PR N:` through `/plan` → `/skeptic-plan` → implement → `/skeptic-review`.
 
 Check the lock any time:
 
@@ -163,7 +182,7 @@ Step-by-step with examples: **[docs/usage.md](docs/usage.md)**.
 | Command | What it does |
 | --- | --- |
 | `/plan` | **Built into Devin.** Read-only draft. Do not add a skill named `plan`. |
-| `/design` | Writer/reviewer loop. Produces a design doc with **Key Decisions** and a **PR Plan**. |
+| `/design` | Writer/reviewer loop. Writes a spec with **Key Decisions** and a **PR Plan**. Does not implement. |
 | `/skeptic-plan` | Independent plan skeptic. Lifts the **write-lock** on PASS. |
 | `/skeptic-review` | Finding-skeptic, then code-skeptic, on a frozen diff. Lifts the **Stop-lock** on PASS. Needs a passed plan first. |
 | `/gate-bypass <reason>` | Audited skip for this session. Reason is required. Not Devin's `/bypass` / `/yolo`. |
