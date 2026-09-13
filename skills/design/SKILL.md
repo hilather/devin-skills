@@ -22,6 +22,7 @@ Do **not** spawn `subagent_general`. Do **not** give writer/reviewer write tools
 - You see a distilled subagent result, not the raw transcript. The task must demand a **complete** fenced file; `resume` if truncated.
 - Nested `subagent: true` skills run **inline** inside a subagent. This orchestrator must run on the **parent** (depth 0). Do not re-invoke `/design` from inside a subagent (`run_subagent` is disabled there).
 - `exec rm` is not on the locked allowlist. Leave summary/review in the cache root; do not try to delete them while writes are locked.
+- Do not `read` the gate script or `current_session` (protected). Invoke `allow-design` with `python3 ~/.config/devin/hooks/devin-gates.py allow-design` (tilde, not `$HOME`). If that fails, retry the repo `hooks/devin-gates.py` path.
 
 ## Tool-call discipline
 
@@ -51,18 +52,31 @@ Exit the loop when `rereview-round-N` (or first review) has 0 open issues.
 
 ## Setup
 
-1. Resolve `GATE` as the first existing regular file:
-   - `$HOME/.config/devin/hooks/devin-gates.py` (installed copy — prefer this; locked `exec` allowlists it)
-   - `<absolute dirname of this SKILL.md>/../../hooks/devin-gates.py` (repo copy; allowlisted via `source_realpath`)
-2. Run `python3 <GATE> allow-design` with **no** `--file`. Optional `--id` is 8 lowercase hex only; omit to generate. Session id comes from `DEVIN_SESSION_ID`, `--session-id`, or `$STATE_DIR/current_session` (hooks write that). Do not invent a session id.
-3. Parse stdout lines `design_id=...` and `design_allow_root=...`. If the command fails or `design_allow_root` is empty, report the error and **stop**. Spawn of `design-writer` / `design-reviewer` is **blocked** until this root is set.
-4. Define paths (thread these for the whole loop; never regenerate):
+1. Run `allow-design` with **no** `--file`, no `$HOME`, no `$STATE_DIR`. Do **not** `read` / `grep` / `find_file_by_name` / `ls` the gate script or `current_session` (protected paths, blocked even after unlock). Do not probe whether the file exists. The CLI resolves session id itself (`DEVIN_SESSION_ID` / `--session-id` / `current_session`). Do not invent a session id. Optional `--id` is 8 lowercase hex only; omit to generate.
+
+```
+python3 ~/.config/devin/hooks/devin-gates.py allow-design
+```
+
+Use a literal tilde (`~/.config/...`), not `$HOME` — locked `exec` treats `$` as a metachar and will deny the command.
+
+2. If that `exec` fails, retry the repo copy (allowlisted via `source_realpath` after install). Still no existence probe — just invoke:
+
+```
+python3 <absolute dirname of this SKILL.md>/../../hooks/devin-gates.py allow-design
+```
+
+3. Parse stdout lines `design_id=...` and `design_allow_root=...`. If both commands fail or `design_allow_root` is empty, print stderr and **stop**. Spawn of `design-writer` / `design-reviewer` is **blocked** until this root is set.
+
+4. `request_scope` the printed `design_allow_root` directory (hook-allowlisted; not a protected path). Devin's workspace sandbox is separate from the gate: without this, parent `write`/`read` of `$XDG_CACHE_HOME/devin-skills/design/<id>/` (default `~/.cache/...`) can be refused as out-of-workspace and the loop dies while still locked. Compaction and the resume-fallback ("disk is the memory") need parent `read` of those files. Keep pasting file bodies into child `task` prompts — children still may not `read` the cache.
+
+5. Define paths (thread these for the whole loop; never regenerate):
    - `design_doc_file`: `<design_allow_root>/design-doc.md`
    - `summary_file`: `<design_allow_root>/summary.md`
    - `review_file`: `<design_allow_root>/review.md`
    - scratch `state.json`: `<design_allow_root>/state.json`
-5. Parent `write` / `edit` **only** succeed under `design_allow_root` (realpath). Workspace source stays locked. Do not symlink out of that root.
-6. Initialize scratch `state.json` (not the HMAC session blob):
+6. Parent `write` / `edit` **only** succeed under `design_allow_root` (realpath). Workspace source stays locked. Do not symlink out of that root.
+7. After `request_scope`, `write` scratch `state.json` (not the HMAC session blob) under that root:
 
 ```
 {"round_count": 0, "writer_id": "", "reviewer_id": "", "design_id": "<id>", "design_allow_root": "<root>", "design_doc_file": "...", "summary_file": "...", "review_file": "..."}
@@ -99,7 +113,7 @@ Save `agent_id` from the result (e.g. `Subagent agent_id=... completed`) into sc
 
 Personas live in `~/.config/devin/agents/design-writer.md` and `design-reviewer.md` (or this repo's `agents/`). **Do not** prepend those files to `task` and **do not** pass a `persona` parameter (unsupported). On `resume`, the profile is already in the child transcript — do not re-inject it.
 
-The cache dir is usually outside the workspace; children may not be able to `read` it. **Paste** the current doc / summary / review into `task` every round. Disk files are for you and for a fresh relaunch.
+The cache dir is usually outside the workspace. After Setup `request_scope`, the **parent** can `read`/`write` it (compaction and resume-fallback). Children may still not `read` it — **paste** the current doc / summary / review into `task` every round. Disk files are the parent's memory, not the child's.
 
 ## Step 1: Write
 
@@ -267,7 +281,7 @@ Keep `design_doc_file`. Leave `summary_file` / `review_file` in the cache root (
 ## Rules
 
 - **Parent is the only writer.** Copy fences; never self-author the doc body.
-- **`allow-design` first.** No `--file`. One HMAC `design_allow_root` directory.
+- **`allow-design` first.** `python3 ~/.config/devin/hooks/devin-gates.py allow-design` (no `--file`, no `$HOME`, no `$STATE_DIR`). Do not `read` the gate or `current_session`. On exec failure, retry the repo `hooks/devin-gates.py` path. Then `request_scope` the printed `design_allow_root` before writing artifacts.
 - **`resume` for revise / re-review.** If resume fails, fresh spawn + files on disk.
 - **No Grok `spawn_subagent` / `resume_from`.** `run_subagent` only.
 - **No child `write`.** Do not wait on a child-hooks-reenter spike.
