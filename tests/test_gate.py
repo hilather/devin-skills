@@ -1120,6 +1120,17 @@ class GoalTest(GateTest):
         seq1 = self.load_goal()["mutation_seq"]
         self.assertGreater(seq1, seq0)
 
+    def test_goal_31_tilde_gate_path_allowed_while_locked(self):
+        # The hook's script-path check must expand ~ like is_gate_cli does,
+        # or `python3 ~/.config/devin/hooks/devin-gates.py goal-status`
+        # falls through to the protected-path rejection.
+        cmd = "%s ~/hooks/devin-gates.py goal-status" % sys.executable
+        proc = self.run_hook(
+            pre("exec", {"command": cmd}),
+            extra_env={"HOME": self.tmpdir},
+        )
+        self.assert_allow(proc)
+
 
 if __name__ == "__main__":
     unittest.main()

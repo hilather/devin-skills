@@ -569,7 +569,7 @@ def _is_goal_cli_exec(command):
     except Exception:
         return False
     try:
-        script = os.path.realpath(argv[1])
+        script = os.path.realpath(os.path.expanduser(argv[1]))
     except (OSError, ValueError):
         return False
     if script not in _gate_script_paths():
