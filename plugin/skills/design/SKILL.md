@@ -290,5 +290,5 @@ Keep `design_doc_file`. Leave `summary_file` / `review_file` in the cache root (
 - **Loop until 0 open.** No max-rounds cap. Nits count.
 - **Escalate, don't spin.** wontfix re-opened twice, or `needs-user-input` → ask the user. User decisions are final.
 - **Foreground only** (`is_background: false`).
-- **Do not name a skill `plan`.** Do not invent a `/goal` harness.
+- **Do not name a skill `plan`.** Do not reinvent `/goal` — the gate-enforced skill exists; a prompt-only imitation is forbidden.
 - **Error handling:** subagent failure → report and stop. Do not continue with missing artifacts.

@@ -6,5 +6,6 @@ This machine uses ~/git/devin-skills/ (installed into ~/.config/devin/).
 - Before claiming done, run /skeptic-review. Stop is hook-blocked until a code-skeptic marker exists.
 - Design docs: /design (writer/reviewer loop). Mandatory PR Plan and Key Decisions.
 - Small tasks: /gate-bypass <reason> or DEVIN_GATES_OFF=1. Default is locked.
-- Do not create a skill named plan; the builtin /plan is the read-only planner.
+- Long objectives: /goal — gate-tracked; Stop blocks while attached+active; only a fresh goal-verifier PASS completes.
+- Do not create a skill named plan; the builtin /plan is the read-only planner. Do not invent a prompt-only /goal — the gate-backed one exists.
 - Hunt lists: ~/git/agent-skills/knowledge/plan-skepticism and code-review-skepticism (vendored snapshot if that repo is absent).

@@ -8,7 +8,7 @@ python3 -m unittest tests.test_install_merge tests.test_gate -v
 
 This checklist confirms the lock against a real Devin session. Use a throwaway git repo, not this one, so a failed lock cannot rewrite `devin-gates.py`.
 
-Default is locked. Builtin `/plan` stays the planner. Do not create a skill named `plan`. Do not ship `/goal`.
+Default is locked. Builtin `/plan` stays the planner. Do not create a skill named `plan`. `/goal` ships only as the gate-backed version — never a prompt-only imitation.
 
 ## 0. Install
 
@@ -69,4 +69,17 @@ Implement the tiny change.
 ## 9. Plugin has no lock
 
 - [ ] `plugin/` has **no** `hooks.json`. Do not add one.
-- [ ] `devin plugins install --local …/plugin` is optional and **not** a substitute for `install.sh`. Commands would be `/devin-skills:design`, not `/design`.
+- [ ] `devin plugins install --local …/plugin` is optional and **not** a substitute for `install.sh`. Commands would be `/devin-skills:design`, not `/design`. The plugin `/goal` skill is prompt-only — no signed state, no Stop block, no verifier mint.
+
+## 10. `/goal`
+
+- [ ] `/goal <objective>` → `set-goal` prints `goal_id=`, `goal_allow_root=`, `status=active`. `goal-status` shows `attached: yes`.
+- [ ] Stop / "I'm done" → **blocked** with the goal reason — even with `source_seq == 0` and in plan mode.
+- [ ] `goal-pause --reason "…"` → Stop **allowed** at the next boundary. `goal-resume` re-attaches and re-blocks.
+- [ ] `goal-update --claim-done` → records a claim; `goal-status` still `active`. Nothing mints.
+- [ ] Fresh `goal-verifier` spawn whose task contains the `goal_id` → `GATES_VERDICT: PASS` → `goal-status` shows `complete`; Stop allowed. **Dump** the live `PostToolUse` payload for `profile=goal-verifier` — the same auto-mint spike as §3 applies (if `tool_response.output` is a stub, the mint may need `read_subagent`).
+- [ ] After completion, edit a workspace file → `goal-status` back to `active` (audit `goal_reopened`); Stop **re-blocked** in the same session (attach survived completion).
+- [ ] `run_subagent` with `profile=goal-verifier` while unattached or paused → **blocked**, even after markers exist.
+- [ ] Three FAIL verdicts → `goal-update --blocked --reason "…"` → Stop allowed; `goal-status` shows `blocked` + reason.
+- [ ] `goal-clear --reason "…"` → `goal-status` prints `goal: none`; a late verifier verdict is ignored (audit `goal_verifier_late_result`).
+- [ ] **Reminder observability (unverified):** record whether hook stdout on `SessionStart` / `UserPromptSubmit` / `PostCompaction` actually reaches the agent. If it does not, the goal still survives on disk — `/goal status` recovers it; degraded, not broken.

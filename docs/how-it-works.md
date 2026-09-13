@@ -12,7 +12,7 @@ Skills tell Devin *what* to do. The gate hook is the only layer that can *stop* 
 | --- | --- | --- |
 | Devin builtin `/plan` | Host read-only draft, approval UI, `exit_plan_mode`. Not our code. | No |
 | User/project hooks (`devin-gates.py`) | HMAC markers, write-lock, Stop-lock, audited bypass. | **Yes** |
-| Custom subagents | Read-only personas (`design-writer`, `design-reviewer`, `plan-skeptic`, `finding-skeptic`, `code-skeptic`), `model: swe-2-high`. | No |
+| Custom subagents | Read-only personas (`design-writer`, `design-reviewer`, `plan-skeptic`, `finding-skeptic`, `code-skeptic`, `goal-verifier`), `model: swe-2-high`. | No |
 | Skills | Orchestrators and slash commands. Prompts only. | No |
 | Tiny `AGENTS.md` | Pointers, not playbooks. | No |
 | Optional `plugin/` | Skills + agents + the tiny rule, for sharing. **No `hooks.json`.** | No — plugin hooks fail-open |
@@ -43,6 +43,8 @@ The gate:
 - `DEVIN_GATES_OFF=1` in the shell that starts `devin`
 - this `prompt_id` has already been Stop-blocked 3 times (loop guard)
 
+An attached `active` **goal blocks Stop ahead of the `mode == plan`, `source_seq == 0`, and `code-passed` early-allows** — a zero-mutation research goal still gates, even in plan mode — while honoring `gates_off`, an audited override, and the loop guard. Paused, blocked, cleared, and completed goals impose nothing; ordinary rules apply. Goal and code blocks share the same 3-per-`prompt_id` budget.
+
 The loop guard exists because Devin can retry a blocked Stop forever. After 3, the turn is allowed to end. That residual is **High** for the Stop product claim. The honest skip for real work is `/gate-bypass`, not Stop-retry.
 
 `source_seq` increments on source-mutating tools (`write` / `edit` / `apply_patch` / …). A later edit after a code PASS clears the marker so you cannot remint from a stale review.
@@ -55,24 +57,29 @@ This repo is an approximation of a Grok Build workflow on Devin CLI (verified on
 | --- | --- | --- |
 | `/plan` harness: read-only except plan file; approval UI | **Keep built-in `/plan`.** Hooks take over **after** approval until a skeptic marker exists. | No `/view-plan` skill. Devin's plan file lives under `~/.devin/plans/`. We do not replace the approval UI. |
 | `/design` writer/reviewer/`resume_from` | Orchestrator skill + read-only `design-writer` / `design-reviewer`. Parent copies fenced markdown onto `design_allow_root`. `resume` for revise / re-review. | Parent sees a distilled result, not the raw transcript. v1 does **not** assume child `write` re-enters hooks. |
-| `/goal` (host rounds, pause/resume/clear, token budget, independent evidence review) | **v1 non-goal. Do not ship `/goal`.** Closest pieces already in v1: builtin `/plan` + write-lock until plan-skeptic PASS + Stop-lock until code-skeptic PASS. | Grok `/goal` is **host** logic. Devin has none of that. A skill named `/goal` would be a prompt saying "keep going" that *looks* like Grok `/goal` and fails silently. |
+| `/goal` (host rounds, pause/resume/clear, token budget, independent evidence review) | **Gate-backed `/goal`.** Workspace-scoped signed goal state; `pause`/`resume`/`clear`/`update` CLI; Stop blocked while an attached goal is `active`; completion minted **only** by a fresh `goal-verifier` `GATES_VERDICT: PASS`; post-completion mutations reopen the goal. | No host round driver — "rounds" are turn structure. No token budget. `goal-pause` lands at the next hook boundary, not mid-turn. The agent can still `goal-clear` itself (audited, like `/gate-bypass`). Stop-loop guard unchanged. |
 | Plan skeptic before implement (3-sweep cap, BLOCKED, failed-sweep autopsy) | `/skeptic-plan` + `plan-skeptic` + **write-lock hook**. Fresh subagent per sweep. Lock lifts only on `GATES_VERDICT: PASS`. | Hook cannot run the skeptic (timeouts). A parent that jailbreaks the skeptic via the task prompt can still produce PASS. Residual, documented. |
 | Code skeptic at done (finding-skeptic + implementation sweep) | `/skeptic-review` + `finding-skeptic` + `code-skeptic` + **Stop hook**. Auto-mint requires a `code-skeptic` PASS whose witness `source_seq` is ≥ current `source_seq`. | Same residual. Stop-loop guard is required. Parent must embed the **full** `git diff` in the task; large diffs may truncate. |
 | Independent skeptic (fresh, no attachment) | Fresh Devin subagent per sweep; parent must not self-review. Profiles omit write/edit/`exec`. | Parent still writes the task prompt (jailbreak residual) **and** the pasted diff. |
 
 ## What we did not copy
 
-**Do not ship a skill named `/goal`.** Grok `/goal` is host logic, not a prompt: token budget, pause/resume/clear, autonomous multi-round driver, and an independent evidence review that can **refuse** completion.
+**Do not ship a prompt-only `/goal` imitation.** Grok `/goal` is host logic, not a prompt: token budget, pause/resume/clear, autonomous multi-round driver, and an independent evidence review that can **refuse** completion. A skill named `/goal` that only *says* "keep going" would let the parent mark itself complete — it would *look* like Grok `/goal` and fail silently. That is still forbidden.
 
-Devin CLI 3000.10.21 exposes **none** of that. A skill named `/goal` would only say "keep going until you think you are done." The parent would mark itself complete. That would *look* like Grok `/goal` and fail silently — worse than an honest non-goal.
+What ships instead is the gate-backed approximation: the durable parts of the harness — signed state, the completion gate, the independent refusal — live in the gate, the only layer that can enforce them.
 
-The durable part of a goal on this stack is already here, without faking the harness:
+- **`/goal <objective>`** registers a workspace-scoped objective in an HMAC-signed goal file and attaches the session.
+- **`goal-update`** is the audited progress-reporting analog (`--message`, `--claim-done`, `--blocked --reason`).
+- **`goal-pause` / `goal-resume` / `goal-clear`** transition status; reasons are required and audited, like `/gate-bypass`.
+- **Completion is a gate state transition, not a self-report.** Only a fresh `goal-verifier` subagent emitting `GATES_VERDICT: PASS` moves `status=complete` — the verifier judges a parent-maintained `checklist.md` plus an evidence bundle, per item (`VERIFIED` / `REFUTED` / `UNVERIFIABLE — needs <evidence>`).
+- **A workspace mutation counter (`mutation_seq`) binds the witness to the tree it verified.** Any later source mutation — in any session — reopens the goal to `active`, and Stop re-blocks because the attach survives completion.
 
-- builtin `/plan` (read-only draft)
-- write-lock until a **plan-skeptic PASS**
-- Stop-lock until a **code-skeptic PASS** (with `source_seq` so a later edit cannot remint)
+What Devin CLI 3000.10.21 still does not give us, and what `/goal` honestly does not do:
 
-That is "don't implement until the plan survives; don't claim done until the diff survives."
+- **Host-driven observe–plan–act rounds.** Nothing advances the goal between turns; the Stop-block only keeps an in-flight turn alive.
+- **A token budget.** `verifier_sweeps` and update counts are the only "rounds" metric.
+- **Mid-turn pause.** `goal-pause` takes effect at the next hook boundary.
+- **An un-escapable guarantee.** The parent can `goal-pause`/`goal-clear`/`--blocked` itself — mitigated by mandatory `--reason` and the audit trail, identical to `/gate-bypass`. The 3-per-`prompt_id` Stop-loop guard can also end a turn unverified (**High** residual, unchanged).
 
 ## Honest limits
 
@@ -111,4 +118,4 @@ The execute path is:
 - `/skeptic-review` + Stop-lock
 - next PR
 
-A skill that loops those PRs until the spec is fully landed would be a `/goal` harness. v1 does not ship that. See [From design to implementation](usage.md#from-design-to-implementation).
+A skill that loops those PRs until the spec is fully landed would be a host-driven `/goal` harness — `/goal` ships the gate-backed single-objective version instead (see the Grok mapping above), not a PR walker. See [From design to implementation](usage.md#from-design-to-implementation).

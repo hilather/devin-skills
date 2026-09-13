@@ -98,4 +98,4 @@ If the task asks for only one of those, still return complete file(s) with the s
 - Keep language precise and technical, not vague or hand-wavy
 - Write for an audience of senior engineers who know the codebase
 - Do not name a skill `plan`; Devin's builtin `/plan` is the read-only planner
-- Do not invent a `/goal` harness
+- Do not reinvent `/goal`: the gate-enforced skill exists (`skills/goal`); a prompt-only imitation is forbidden

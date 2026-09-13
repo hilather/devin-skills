@@ -912,6 +912,7 @@ class GoalTest(GateTest):
         st = gates.load_state("other-session")
         self.assertEqual(st.get("active_goal_id"), self.load_goal()["goal_id"])
         self.assertEqual(self.load_goal()["status"], "active")
+        self.assertIn("attach-only", self.audit_text())
 
     def test_goal_14_status_reports_attachment(self):
         self.set_goal()
@@ -1113,10 +1114,19 @@ class GoalTest(GateTest):
         proc = self.run_cli(["goal-update"])
         self.assertNotEqual(proc.returncode, 0)
 
-    def test_goal_30_mutation_seq_increments_on_save(self):
+    def test_goal_30_mutation_seq_increments_on_workspace_write(self):
         self.set_goal()
         seq0 = self.load_goal()["mutation_seq"]
         self.run_cli(["goal-update", "--message", "x"])
+        # Goal-file writes are not workspace-source mutations.
+        self.assertEqual(self.load_goal()["mutation_seq"], seq0)
+        self.run_hook(
+            post(
+                "write",
+                {"file_path": os.path.join(self.workspace, "src", "m.py")},
+                output="ok",
+            )
+        )
         seq1 = self.load_goal()["mutation_seq"]
         self.assertGreater(seq1, seq0)
 
@@ -1130,6 +1140,473 @@ class GoalTest(GateTest):
             extra_env={"HOME": self.tmpdir},
         )
         self.assert_allow(proc)
+
+    # ---------------------------------------------------------- PR 2 helpers
+
+    def goal_id_from(self, proc):
+        for tok in proc.stdout.split():
+            if tok.startswith("goal_id="):
+                return tok.split("=", 1)[1]
+        self.fail("no goal_id in %r" % proc.stdout)
+
+    def attach(self, gid, session_id=SESSION):
+        st = gates.load_state(session_id) or gates.default_state(session_id)
+        st["session_id"] = session_id
+        st["active_goal_id"] = gid
+        self.assertTrue(gates.save_state(st))
+
+    def verifier_ti(self, gid, task=None, resume=None):
+        ti = {
+            "profile": "goal-verifier",
+            "title": "verify",
+            "task": task if task is not None else "verify goal %s" % gid,
+        }
+        if resume:
+            ti["resume"] = resume
+        return ti
+
+    def verifier_post(
+        self, gid, verdict_line, task=None, session_id=SESSION, resume=None
+    ):
+        ti = self.verifier_ti(gid, task=task, resume=resume)
+        # Real flow: the allowed spawn (pre) records the verify-seq binding
+        # the post handler checks. A blocked spawn just leaves it unset,
+        # which the post treats as a late result either way.
+        self.run_hook(pre("run_subagent", ti, session_id=session_id))
+        out = "agent_id=deadbeef\nper-item verdicts...\n"
+        if verdict_line:
+            out += verdict_line + "\n"
+        return self.run_hook(
+            post(
+                "run_subagent",
+                ti,
+                output=out,
+                session_id=session_id,
+            )
+        )
+
+    def audit_text(self):
+        path = os.path.join(self.state_dir, "audit.jsonl")
+        if not os.path.exists(path):
+            return ""
+        with open(path, "r", encoding="utf-8") as fh:
+            return fh.read()
+
+    def reminder(self, name, session_id=SESSION, prompt=""):
+        return self.run_hook(
+            {
+                "hook_event_name": name,
+                "session_id": session_id,
+                "prompt_id": PROMPT,
+                "prompt": prompt,
+            }
+        )
+
+    def reminder_context(self, proc):
+        data = json.loads(proc.stdout.strip())
+        return data.get("hookSpecificOutput", {}).get("additionalContext") or ""
+
+    # --------------------------------------------------------- verifier mint
+
+    def test_goal_32_verifier_pass_completes(self):
+        gid = self.goal_id_from(self.set_goal())
+        seq0 = self.load_goal()["mutation_seq"]
+        proc = self.verifier_post(gid, "GATES_VERDICT: PASS")
+        self.assert_allow(proc)
+        goal = self.load_goal()
+        self.assertEqual(goal["status"], "complete")
+        self.assertEqual(goal["verifier_sweeps"], 1)
+        wit = goal["witnesses"][-1]
+        self.assertEqual(wit["kind"], "goal")
+        self.assertEqual(wit["verdict"], "PASS")
+        self.assertEqual(wit["sweep"], 1)
+        self.assertEqual(wit["mutation_seq"], seq0)
+        # A read-only verifier is not a workspace-source mutation.
+        self.assertEqual(self.load_st().get("source_seq") or 0, 0)
+        self.assertIn("goal_completed", self.audit_text())
+
+    def test_goal_33_verifier_fail_does_not_complete(self):
+        gid = self.goal_id_from(self.set_goal())
+        proc = self.verifier_post(gid, "GATES_VERDICT: FAIL")
+        self.assert_allow(proc)
+        goal = self.load_goal()
+        self.assertEqual(goal["status"], "active")
+        self.assertEqual(goal["verifier_sweeps"], 1)
+        self.assertEqual(goal["witnesses"][-1]["verdict"], "FAIL")
+
+    def test_goal_34_verifier_blocked_does_not_complete(self):
+        gid = self.goal_id_from(self.set_goal())
+        proc = self.verifier_post(gid, "GATES_VERDICT: BLOCKED")
+        self.assert_allow(proc)
+        goal = self.load_goal()
+        self.assertEqual(goal["status"], "active")
+        self.assertEqual(goal["witnesses"][-1]["verdict"], "BLOCKED")
+
+    def test_goal_35_missing_verdict_is_fail(self):
+        gid = self.goal_id_from(self.set_goal())
+        proc = self.verifier_post(gid, "")
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertIn("no GATES_VERDICT", proc.stdout)
+        goal = self.load_goal()
+        self.assertEqual(goal["status"], "active")
+        self.assertEqual(goal["verifier_sweeps"], 1)
+        self.assertEqual(goal["witnesses"][-1]["verdict"], "FAIL")
+
+    def test_goal_36_resumed_verifier_not_a_witness(self):
+        gid = self.goal_id_from(self.set_goal())
+        proc = self.verifier_post(gid, "GATES_VERDICT: PASS", resume="agent-1")
+        self.assert_allow(proc)
+        goal = self.load_goal()
+        self.assertEqual(goal["status"], "active")
+        self.assertEqual(goal["verifier_sweeps"], 0)
+        self.assertEqual(goal["witnesses"], [])
+
+    def test_goal_37_task_missing_goal_id_is_late_result(self):
+        gid = self.goal_id_from(self.set_goal())
+        proc = self.verifier_post(gid, "GATES_VERDICT: PASS", task="no id here")
+        self.assert_allow(proc)
+        goal = self.load_goal()
+        self.assertEqual(goal["status"], "active")
+        self.assertEqual(goal["verifier_sweeps"], 0)
+        self.assertIn("goal_verifier_late_result", self.audit_text())
+
+    def test_goal_38_late_result_after_pause_ignored(self):
+        gid = self.goal_id_from(self.set_goal())
+        self.run_cli(["goal-pause", "--reason", "break"])
+        proc = self.verifier_post(gid, "GATES_VERDICT: PASS")
+        self.assert_allow(proc)
+        goal = self.load_goal()
+        self.assertEqual(goal["status"], "paused")
+        self.assertEqual(goal["verifier_sweeps"], 0)
+        self.assertIn("goal_verifier_late_result", self.audit_text())
+
+    def test_goal_39_late_result_after_clear_ignored(self):
+        gid = self.goal_id_from(self.set_goal())
+        self.run_cli(["goal-clear", "--reason", "done"])
+        proc = self.verifier_post(gid, "GATES_VERDICT: PASS")
+        self.assert_allow(proc)
+        self.assertIn("goal_verifier_late_result", self.audit_text())
+
+    def test_goal_40_unattached_session_verdict_ignored(self):
+        gid = self.goal_id_from(self.set_goal())
+        proc = self.verifier_post(
+            gid, "GATES_VERDICT: PASS", session_id="other-session"
+        )
+        self.assert_allow(proc)
+        goal = self.load_goal()
+        self.assertEqual(goal["status"], "active")
+        self.assertEqual(goal["verifier_sweeps"], 0)
+
+    # ------------------------------------------------------------------ stop
+
+    def test_goal_41_stop_blocked_active_goal_zero_source(self):
+        self.set_goal()
+        self.assertEqual(self.load_st().get("source_seq") or 0, 0)
+        data = self.assert_block(self.run_hook(stop_event()), 0)
+        self.assertIn("goal", data.get("reason", ""))
+
+    def test_goal_42_stop_blocked_in_plan_mode(self):
+        self.set_goal()
+        st = self.load_st()
+        st["mode"] = "plan"
+        gates.save_state(st)
+        data = self.assert_block(self.run_hook(stop_event()), 0)
+        self.assertIn("goal", data.get("reason", ""))
+
+    def test_goal_43_stop_allowed_non_active_statuses(self):
+        for status in ("paused", "blocked", "complete"):
+            with self.subTest(status=status):
+                self.seed_goal(status=status)
+                self.attach("aa11bb22")
+                self.assert_allow(self.run_hook(stop_event()))
+                self.run_cli(["goal-clear", "--reason", "x"])
+        self.assert_allow(self.run_hook(stop_event()))
+
+    def test_goal_44_stop_loop_guard_fires_at_max(self):
+        self.set_goal()
+        for _ in range(3):
+            self.assert_block(self.run_hook(stop_event()), 0)
+        # source_seq is 0, so once the goal block releases the turn ends.
+        self.assert_allow(self.run_hook(stop_event()))
+        self.assertIn("stop_loop_guard_fired", self.audit_text())
+
+    # -------------------------------------------------------------- mutation
+
+    def test_goal_45_workspace_mutation_reopens_complete(self):
+        self.seed_goal(status="complete")
+        self.attach("aa11bb22")
+        self.run_hook(
+            post(
+                "write",
+                {"file_path": os.path.join(self.workspace, "src", "m.py")},
+                output="ok",
+            )
+        )
+        goal = self.load_goal("aa11bb22")
+        self.assertEqual(goal["status"], "active")
+        self.assertEqual(goal["mutation_seq"], 1)
+        self.assertIn("goal_reopened", self.audit_text())
+
+    def test_goal_46_allow_root_write_not_a_mutation(self):
+        proc = self.set_goal()
+        gid = self.goal_id_from(proc)
+        root = self.load_goal()["allow_root"]
+        self.run_hook(
+            post(
+                "write",
+                {"file_path": os.path.join(root, "checklist.md")},
+                output="ok",
+            )
+        )
+        self.assertEqual(self.load_goal()["mutation_seq"], 0)
+
+    def test_goal_47_exec_mutation_classifier(self):
+        self.set_goal()
+        self.run_hook(post("exec", {"command": "make build"}, output="ok"))
+        self.assertEqual(self.load_goal()["mutation_seq"], 1)
+        self.run_hook(
+            post(
+                "exec",
+                {"command": "%s -m unittest tests.test_gate" % sys.executable},
+                output="ok",
+            )
+        )
+        self.assertEqual(self.load_goal()["mutation_seq"], 1)
+
+    # ------------------------------------------------------------- spawn gate
+
+    def test_goal_48_spawn_verifier_allowed_attached_locked(self):
+        gid = self.goal_id_from(self.set_goal())
+        # No markers: session is fully write-locked.
+        proc = self.run_hook(
+            pre("run_subagent", self.verifier_ti(gid))
+        )
+        self.assert_allow(proc)
+
+    def test_goal_49_spawn_verifier_blocked_unattached(self):
+        gid = self.goal_id_from(self.set_goal())
+        proc = self.run_hook(
+            pre(
+                "run_subagent",
+                self.verifier_ti(gid),
+                session_id="other-session",
+            )
+        )
+        self.assert_block(proc, 0)
+
+    def test_goal_50_spawn_verifier_blocked_inactive(self):
+        gid = self.goal_id_from(self.set_goal())
+        self.run_cli(["goal-pause", "--reason", "break"])
+        proc = self.run_hook(
+            pre("run_subagent", self.verifier_ti(gid))
+        )
+        self.assert_block(proc, 0)
+
+    def test_goal_51_spawn_verifier_blocked_despite_markers(self):
+        gid = self.goal_id_from(self.set_goal())
+        # The spawning session is unlocked but unattached: still blocked.
+        st = gates.default_state("other-session")
+        st["session_id"] = "other-session"
+        st["markers"] = [self.plan_marker(), self.code_marker()]
+        gates.save_state(st)
+        proc = self.run_hook(
+            pre(
+                "run_subagent",
+                self.verifier_ti(gid),
+                session_id="other-session",
+            )
+        )
+        self.assert_block(proc, 0)
+
+    # -------------------------------------------------------------- reminders
+
+    def test_goal_52_session_start_reminder(self):
+        gid = self.goal_id_from(self.set_goal())
+        proc = self.reminder("SessionStart")
+        ctx = self.reminder_context(proc)
+        self.assertIn("goal %s" % gid, ctx)
+        self.assertIn("ACTIVE", ctx)
+
+    def test_goal_53_prompt_submit_reminder_attached_active(self):
+        gid = self.goal_id_from(self.set_goal())
+        proc = self.reminder("UserPromptSubmit")
+        self.assertIn("goal %s" % gid, self.reminder_context(proc))
+        # Unattached session gets no goal line.
+        proc = self.reminder("UserPromptSubmit", session_id="other-session")
+        self.assertNotIn("goal %s" % gid, self.reminder_context(proc))
+
+    def test_goal_54_prompt_submit_reminder_not_when_paused(self):
+        gid = self.goal_id_from(self.set_goal())
+        self.run_cli(["goal-pause", "--reason", "break"])
+        proc = self.reminder("UserPromptSubmit")
+        self.assertNotIn("goal %s" % gid, self.reminder_context(proc))
+
+    def test_goal_55_post_compaction_reminder(self):
+        gid = self.goal_id_from(self.set_goal())
+        proc = self.reminder("PostCompaction")
+        ctx = self.reminder_context(proc)
+        self.assertIn("goal %s" % gid, ctx)
+        self.assertIn("checklist.md", ctx)
+
+    # ------------------------------------------------- review-sweep findings
+
+    def test_goal_56_goal_cli_exec_not_a_mutation(self):
+        self.seed_goal(status="complete")
+        self.attach("aa11bb22")
+        cmd = "%s %s goal-status" % (sys.executable, self.gate_py)
+        self.run_hook(post("exec", {"command": cmd}, output="ok"))
+        goal = self.load_goal("aa11bb22")
+        self.assertEqual(goal["status"], "complete")
+        self.assertEqual(goal["mutation_seq"], 0)
+
+    def test_goal_57_failed_verifier_spawn_not_a_sweep(self):
+        gid = self.goal_id_from(self.set_goal())
+        self.run_hook(
+            post(
+                "run_subagent",
+                self.verifier_ti(gid),
+                output="",
+                success=False,
+            )
+        )
+        goal = self.load_goal()
+        self.assertEqual(goal["status"], "active")
+        self.assertEqual(goal["verifier_sweeps"], 0)
+        self.assertEqual(goal["witnesses"], [])
+
+    def test_goal_58_stale_attach_after_clear_stop_allowed(self):
+        gid = self.goal_id_from(self.set_goal())
+        # Another session clears; this session keeps a stale attach.
+        self.run_cli(
+            ["goal-clear", "--reason", "x"],
+            extra_env={"DEVIN_SESSION_ID": "other-session"},
+        )
+        self.attach(gid)
+        self.assert_allow(self.run_hook(stop_event()))
+
+    def test_goal_59_gate_status_prints_goal_line(self):
+        gid = self.goal_id_from(self.set_goal())
+        proc = self.run_cli(["status"])
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertIn("goal: %s:active" % gid, proc.stdout)
+
+    def test_goal_60_mid_verification_mutation_is_late(self):
+        gid = self.goal_id_from(self.set_goal())
+        ti = self.verifier_ti(gid)
+        self.assert_allow(self.run_hook(pre("run_subagent", ti)))
+        # A workspace mutation landing while the verifier runs makes its
+        # evidence stale — the verdict must be ignored, not minted.
+        self.run_hook(
+            post(
+                "write",
+                {"file_path": os.path.join(self.workspace, "src", "m.py")},
+                output="ok",
+            )
+        )
+        proc = self.run_hook(
+            post(
+                "run_subagent",
+                ti,
+                output="agent_id=deadbeef\nGATES_VERDICT: PASS\n",
+            )
+        )
+        self.assert_allow(proc)
+        goal = self.load_goal()
+        self.assertEqual(goal["status"], "active")
+        self.assertEqual(goal["verifier_sweeps"], 0)
+        self.assertIn("goal_verifier_late_result", self.audit_text())
+
+    def test_goal_61_spawn_verifier_honors_bypass_and_gates_off(self):
+        self.set_goal()
+        st = gates.default_state("bypassed-session")
+        st["session_id"] = "bypassed-session"
+        st["override_reason"] = "test bypass"
+        gates.save_state(st)
+        proc = self.run_hook(
+            pre(
+                "run_subagent",
+                self.verifier_ti("aa11bb22"),
+                session_id="bypassed-session",
+            )
+        )
+        self.assert_allow(proc)
+        proc = self.run_hook(
+            pre(
+                "run_subagent",
+                self.verifier_ti("aa11bb22"),
+                session_id="other-session",
+            ),
+            extra_env={"DEVIN_GATES_OFF": "1"},
+        )
+        self.assert_allow(proc)
+
+    def test_goal_62_id_reuse_detaches_stale_sessions(self):
+        proc = self.run_cli(["set-goal", "--objective", "x", "--id", "aa11bb22"])
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.attach("aa11bb22", session_id="other-session")
+        self.run_cli(["goal-clear", "--reason", "x"])
+        proc = self.run_cli(["set-goal", "--objective", "y", "--id", "aa11bb22"])
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        st = gates.load_state("other-session")
+        self.assertIsNone(st.get("active_goal_id"))
+
+    def test_goal_63_pause_resume_mid_flight_is_late(self):
+        gid = self.goal_id_from(self.set_goal())
+        ti = self.verifier_ti(gid)
+        self.assert_allow(self.run_hook(pre("run_subagent", ti)))
+        self.assertEqual(self.load_st().get("goal_verify", {}).get("gid"), gid)
+        # pause -> resume between spawn and result: epoch bumps, verdict late.
+        self.run_cli(["goal-pause", "--reason", "x"])
+        self.run_cli(["goal-resume"])
+        proc = self.run_hook(
+            post(
+                "run_subagent",
+                ti,
+                output="agent_id=deadbeef\nGATES_VERDICT: PASS\n",
+            )
+        )
+        self.assert_allow(proc)
+        goal = self.load_goal()
+        self.assertEqual(goal["status"], "active")
+        self.assertEqual(goal["verifier_sweeps"], 0)
+        self.assertIn("goal_verifier_late_result", self.audit_text())
+
+    def test_goal_64_bypassed_but_attached_can_mint(self):
+        gid = self.goal_id_from(self.set_goal())
+        st = self.load_st()
+        st["override_reason"] = "leftover bypass"
+        gates.save_state(st)
+        # Attached+active records the verify binding before the bypass
+        # early-allow, so a bypassed session still mints.
+        ti = self.verifier_ti(gid)
+        self.assert_allow(self.run_hook(pre("run_subagent", ti)))
+        self.assertEqual(self.load_st().get("goal_verify", {}).get("gid"), gid)
+        proc = self.run_hook(
+            post(
+                "run_subagent",
+                ti,
+                output="agent_id=deadbeef\nGATES_VERDICT: PASS\n",
+            )
+        )
+        self.assert_allow(proc)
+        self.assertEqual(self.load_goal()["status"], "complete")
+
+    def test_goal_65_gid_mismatch_in_verify_binding_is_late(self):
+        gid = self.goal_id_from(self.set_goal())
+        ti = self.verifier_ti(gid)
+        self.assert_allow(self.run_hook(pre("run_subagent", ti)))
+        st = self.load_st()
+        st["goal_verify"]["gid"] = "ffffffff"
+        gates.save_state(st)
+        proc = self.run_hook(
+            post(
+                "run_subagent",
+                ti,
+                output="agent_id=deadbeef\nGATES_VERDICT: PASS\n",
+            )
+        )
+        self.assert_allow(proc)
+        self.assertEqual(self.load_goal()["status"], "active")
 
 
 if __name__ == "__main__":

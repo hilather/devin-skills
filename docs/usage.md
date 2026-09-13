@@ -165,7 +165,7 @@ Keep `design-doc.md`. That file is the input to `/plan`. Do not start implementi
 | --- | --- |
 | Unlock workspace writes | `/skeptic-plan` after `/plan` |
 | Edit `src/` | `/plan` a PR slice, then implement |
-| Walk PR 1…N by itself | You run `/plan` per slice. There is no `/goal`. |
+| Walk PR 1…N by itself | You run `/plan` per slice. `/goal` tracks one objective, not a PR list. |
 | Survive a vague one-liner | Put constraints in the `/design` argument |
 | Run inside a subagent | Invoke it on the parent (depth 0) only |
 
@@ -224,7 +224,7 @@ The writer is required to end the spec with `## PR Plan`, shaped so a later exec
 
 Each PR must be independently reviewable and mergeable. Missing `## PR Plan` is at least a major review finding. Step 6 of `/design` extracts that section and presents it to you. Then the skill **stops**. Workspace source is still locked.
 
-There is no Devin skill that walks `PR 1 … PR N` on its own. That would be Grok `/goal` (host rounds, pause/resume, an evidence review that can refuse completion). This repo does not ship `/goal`. The honest execute path is Devin's built-in `/plan`, one slice at a time:
+No Devin skill walks `PR 1 … PR N` on its own — `/goal` tracks a single verifiable objective, not a PR list. The honest execute path is Devin's built-in `/plan`, one slice at a time:
 
 ```
 /plan implement PR 1 from the design doc at ~/.cache/devin-skills/design/<id>/design-doc.md
@@ -256,12 +256,29 @@ Small change, one PR in the plan? One `/plan` through the whole spec is fine. Mu
 
 Do **not** name a skill `plan`. Do **not** ask `/design` to start implementing. Do **not** `/gate-bypass` just to skip from spec to code unless the work is actually tiny.
 
+### 6. Long objectives (optional)
+
+For work with a verifiable completion condition that should outlive a single turn:
+
+```
+/goal get the full test suite green
+```
+
+The gate registers a signed workspace goal and attaches your session. While it is `active`, **Stop is blocked** — even with zero mutations or in plan mode. `goal-update --message` reports progress (audited); `goal-update --claim-done` records a claim. Only a fresh `goal-verifier` subagent PASS — judging a `checklist.md` plus your evidence bundle — moves the goal to `complete`.
+
+- `/goal pause --reason …` / `/goal resume` / `/goal clear --reason …` / `/goal status` manage the run.
+- Three verifier FAILs → `goal-update --blocked --reason …` and report to the user.
+- After `complete`, a later workspace mutation **reopens** the goal (the witness is bound to the tree it verified) and re-blocks Stop.
+- Implementation goals still compose with `/skeptic-plan` and `/skeptic-review` — the verifier checks the *objective*; the skeptics check the *diff*.
+- Honest gaps: no host round driver, no token budget, `goal-pause` lands at the next hook boundary, and you can always `goal-clear` yourself (audited).
+
 ## Commands at a glance
 
 | You type | What happens |
 | --- | --- |
 | `/plan …` | Built-in read-only draft. Approve in Devin's UI. |
 | `/design …` | Spec: writer/reviewer loop. See [How to use /design](#how-to-use-design). |
+| `/goal …` | Gate-tracked objective. Stop blocks until a fresh `goal-verifier` PASSes. `status`/`pause`/`resume`/`clear` subcommands. |
 | `/skeptic-plan` | Attacks the plan. Lifts the write-lock on PASS. |
 | `/skeptic-review` | Attacks the frozen diff. Lifts the Stop-lock on PASS. |
 | `/skeptic-review main...HEAD` | Same, but use this git range. |

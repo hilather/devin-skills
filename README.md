@@ -120,7 +120,7 @@ flowchart TD
   H -->|no| I[Done]
 ```
 
-Do not add a skill named `plan`. Do not invent a `/goal` that "just keeps going" through the PR list — Devin has no host harness for that. Details: **[docs/usage.md](docs/usage.md#from-design-to-implementation)**.
+Do not add a skill named `plan`. `/goal` exists, but it tracks one verifiable objective — it does not walk a PR list for you. Details: **[docs/usage.md](docs/usage.md#from-design-to-implementation)**.
 
 ## Install
 
@@ -213,8 +213,9 @@ Full walkthrough: **[docs/usage.md](docs/usage.md#how-to-use-design)**.
 | `/skeptic-review` | Finding-skeptic, then code-skeptic, on a frozen diff. Lifts the **Stop-lock** on PASS. Needs a passed plan first. |
 | `/gate-bypass <reason>` | Audited skip for this session. Reason is required. Not Devin's `/bypass` / `/yolo`. |
 | `/gate-status` | Print lock state. Read-only. |
+| `/goal <objective>` | Gate-tracked objective. Stop stays blocked until a fresh `goal-verifier` PASSes. `status` / `pause` / `resume` / `clear` manage the run. |
 
-There is **no** `/goal`. Grok's goal harness is host logic Devin does not have. Faking it with a prompt would look like the real thing and fail silently. See [What we did not copy](docs/how-it-works.md#what-we-did-not-copy).
+`/goal` is the gate-backed version, not a prompt imitation: the gate owns signed goal state, and only a fresh `goal-verifier` `GATES_VERDICT: PASS` can mark it complete. What it cannot do — host-driven rounds, a token budget, mid-turn pause — is documented in [What we did not copy](docs/how-it-works.md#what-we-did-not-copy).
 
 ## Bypass
 
@@ -267,8 +268,8 @@ Live Devin checklist (throwaway repo): **[docs/smoke-test.md](docs/smoke-test.md
 hooks/devin-gates.py     # the lock
 hooks/hook-entries.json  # what install.sh merges into config.json
 install.sh / uninstall.sh
-skills/                  # /design /skeptic-plan /skeptic-review /gate-bypass /gate-status
-agents/                  # five read-only personas
+skills/                  # /design /goal /skeptic-plan /skeptic-review /gate-bypass /gate-status
+agents/                  # six read-only personas
 rules/AGENTS.md          # short pointers, not a playbook
 docs/                    # this documentation
 plugin/                  # optional share pack — no hooks
