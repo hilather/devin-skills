@@ -1,0 +1,5 @@
+{
+  "name": "devin-skills",
+  "version": "0.1.0",
+  "description": "Design / skeptic-plan / skeptic-review skills and personas. The write-lock is NOT in this plugin; install user hooks from ~/git/devin-skills/install.sh."
+}
