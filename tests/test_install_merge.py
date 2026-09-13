@@ -547,6 +547,55 @@ class InstallMergeTest(unittest.TestCase):
         cfg = self.config()
         self.assertEqual(set(cfg["hooks"].keys()), set(HERDR_EVENTS))
 
+    def test_goal_module_installed_and_uninstalled(self):
+        self.install()
+        installed = os.path.join(self.prefix, "hooks", "devin_gates_goal.py")
+        self.assertTrue(os.path.isfile(installed))
+        self.assertFalse(os.path.islink(installed))
+        inst_st = os.stat(installed)
+        src_path = os.path.join(ROOT, "hooks", "devin_gates_goal.py")
+        src_st = os.stat(src_path)
+        self.assertNotEqual((inst_st.st_ino, inst_st.st_dev), (src_st.st_ino, src_st.st_dev))
+        self.assertEqual(sha256_file(installed), sha256_file(src_path))
+        self.uninstall()
+        self.assertFalse(os.path.lexists(installed))
+
+    def test_installed_gate_has_goal_splice_and_module_import(self):
+        self.install()
+        installed = os.path.join(self.prefix, "hooks", "devin-gates.py")
+        with open(installed, "r", encoding="utf-8") as fh:
+            text = fh.read()
+        self.assertIn("devin-skills-goal:begin", text)
+        self.assertIn("import devin_gates_goal", text)
+        # And the installed pair is executable end-to-end.
+        proc = subprocess.run(
+            ["python3", installed, "goal-status"],
+            env=self.env,
+            cwd=self.tmpdir,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertIn("goal: none", proc.stdout)
+
+    def test_src_without_goal_files_still_installs(self):
+        # A src tree lacking the goal module/patcher installs a gate whose
+        # splice block degrades gracefully (module import swallowed).
+        src = self.make_src()
+        self.install(src=src)
+        self.assertFalse(
+            os.path.exists(os.path.join(self.prefix, "hooks", "devin_gates_goal.py"))
+        )
+        installed = os.path.join(self.prefix, "hooks", "devin-gates.py")
+        proc = subprocess.run(
+            ["python3", installed, "status"],
+            env=self.env,
+            cwd=self.tmpdir,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+
     def test_gate_timeout_and_matcher(self):
         self.install()
         cfg = self.config()

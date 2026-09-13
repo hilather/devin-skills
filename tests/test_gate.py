@@ -17,6 +17,7 @@ from unittest import mock
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 GATE_PY = os.path.join(ROOT, "hooks", "devin-gates.py")
+REPO_GATE_PY = GATE_PY
 FIXTURES = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fixtures")
 SESSION = "test-session-1"
 PROMPT = "prompt-1"
@@ -92,6 +93,7 @@ class GateTest(unittest.TestCase):
         os.environ.pop("XDG_DATA_HOME", None)
         os.chdir(self.tmpdir)
         self.env = os.environ.copy()
+        self.gate_py = GATE_PY
 
     def tearDown(self):
         os.chdir(self._old_cwd)
@@ -106,7 +108,7 @@ class GateTest(unittest.TestCase):
         if extra_env:
             env.update(extra_env)
         proc = subprocess.run(
-            [sys.executable, GATE_PY, "hook"],
+            [sys.executable, self.gate_py, "hook"],
             input=json.dumps(payload),
             capture_output=True,
             text=True,
@@ -120,7 +122,7 @@ class GateTest(unittest.TestCase):
         if extra_env:
             env.update(extra_env)
         proc = subprocess.run(
-            [sys.executable, GATE_PY] + list(args),
+            [sys.executable, self.gate_py] + list(args),
             capture_output=True,
             text=True,
             env=env,
@@ -698,6 +700,425 @@ class GateTest(unittest.TestCase):
             self.assertTrue(hook["command"].endswith(" hook") or " hook" in hook["command"])
             self.assertEqual(hook["timeout"], 5)
         self.assertNotIn("PermissionRequest", data)
+
+
+class GoalTest(GateTest):
+    """Goal state/CLI: exercised against a temp copy of the gate with the
+    apply_goal_patch.py block spliced in, plus devin_gates_goal.py beside it."""
+
+    def setUp(self):
+        super().setUp()
+        hooks_dir = os.path.join(self.tmpdir, "hooks")
+        os.makedirs(hooks_dir)
+        shutil.copy(REPO_GATE_PY, hooks_dir)
+        shutil.copy(os.path.join(ROOT, "hooks", "devin_gates_goal.py"), hooks_dir)
+        gate_copy = os.path.join(hooks_dir, "devin-gates.py")
+        proc = subprocess.run(
+            [
+                sys.executable,
+                os.path.join(ROOT, "hooks", "apply_goal_patch.py"),
+                gate_copy,
+            ],
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.gate_py = gate_copy
+        # Inherited tests embed the module-level GATE_PY in their exec
+        # commands; the patched copy is the gate under test here.
+        globals()["GATE_PY"] = gate_copy
+
+    def tearDown(self):
+        globals()["GATE_PY"] = REPO_GATE_PY
+        super().tearDown()
+
+    def goal_dir(self):
+        ws = os.path.realpath(self.workspace)
+        h = hashlib.sha256(ws.encode("utf-8")).hexdigest()[:16]
+        return os.path.join(self.state_dir, "goals", h)
+
+    def goal_files(self):
+        d = self.goal_dir()
+        if not os.path.isdir(d):
+            return []
+        return [n for n in os.listdir(d) if n.endswith(".json")]
+
+    def load_goal(self, goal_id=None):
+        d = self.goal_dir()
+        if goal_id is None:
+            names = self.goal_files()
+            if not names:
+                return None
+            goal_id = names[0][: -len(".json")]
+        with open(os.path.join(d, goal_id + ".json"), "r", encoding="utf-8") as fh:
+            return json.load(fh)
+
+    def seed_goal(self, status="active", goal_id="aa11bb22", **extra):
+        body = {
+            "v": 1,
+            "goal_id": goal_id,
+            "workspace": os.path.realpath(self.workspace),
+            "objective": "seeded objective",
+            "status": status,
+            "created_at": "2026-01-01T00:00:00Z",
+            "updated_at": "2026-01-01T00:00:00Z",
+            "created_session": SESSION,
+            "allow_root": os.path.join(
+                self.cache_dir, "devin-skills", "goal", goal_id
+            ),
+            "mutation_seq": 0,
+            "verifier_sweeps": 0,
+            "updates": [],
+            "witnesses": [],
+            "blocked_reason": None,
+        }
+        body.update(extra)
+        msg = json.dumps(
+            body, sort_keys=True, separators=(",", ":"), ensure_ascii=True
+        ).encode("utf-8")
+        body["hmac"] = hmac.new(self.secret, msg, hashlib.sha256).hexdigest()
+        d = self.goal_dir()
+        os.makedirs(d, exist_ok=True)
+        with open(os.path.join(d, goal_id + ".json"), "w", encoding="utf-8") as fh:
+            json.dump(body, fh)
+        return body
+
+    def set_goal(self, objective="ship it", **kw):
+        args = ["set-goal", "--objective", objective]
+        proc = self.run_cli(args, **kw)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        return proc
+
+    def test_goal_01_set_goal_signs_and_attaches(self):
+        proc = self.set_goal()
+        self.assertIn("goal_id=", proc.stdout)
+        self.assertIn("goal_allow_root=", proc.stdout)
+        self.assertIn("status=active", proc.stdout)
+        goal = self.load_goal()
+        self.assertIsNotNone(goal)
+        self.assertTrue(gates.verify_hmac(goal))
+        self.assertEqual(goal["status"], "active")
+        self.assertEqual(goal["objective"], "ship it")
+        st = self.load_st()
+        self.assertEqual(st.get("active_goal_id"), goal["goal_id"])
+
+    def test_goal_02_forged_goal_file_treated_absent(self):
+        goal = self.seed_goal()
+        goal["hmac"] = "0" * 64
+        path = os.path.join(self.goal_dir(), goal["goal_id"] + ".json")
+        with open(path, "w", encoding="utf-8") as fh:
+            json.dump(goal, fh)
+        proc = self.run_cli(["goal-status"])
+        self.assertIn("goal: none", proc.stdout)
+        # A tampered file does not hold the workspace slot either.
+        proc = self.run_cli(["set-goal", "--objective", "x"])
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+
+    def test_goal_03_pause_requires_reason(self):
+        self.set_goal()
+        proc = self.run_cli(["goal-pause"])
+        self.assertNotEqual(proc.returncode, 0)
+
+    def test_goal_04_clear_requires_reason(self):
+        self.set_goal()
+        proc = self.run_cli(["goal-clear"])
+        self.assertNotEqual(proc.returncode, 0)
+
+    def test_goal_04b_blocked_requires_reason(self):
+        self.set_goal()
+        proc = self.run_cli(["goal-update", "--blocked"])
+        self.assertNotEqual(proc.returncode, 0)
+
+    def test_goal_05_pause_resume_cycle(self):
+        self.set_goal("x")
+        proc = self.run_cli(["goal-pause", "--reason", "break"])
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(self.load_goal()["status"], "paused")
+        proc = self.run_cli(["goal-resume"])
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(self.load_goal()["status"], "active")
+        self.assertIn("goal_allow_root=", proc.stdout)
+        self.assertIn("objective=x", proc.stdout)
+
+    def test_goal_06_second_goal_refused_until_cleared(self):
+        self.set_goal("x")
+        proc = self.run_cli(["set-goal", "--objective", "y"])
+        self.assertNotEqual(proc.returncode, 0)
+        proc = self.run_cli(["goal-clear", "--reason", "done"])
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        proc = self.run_cli(["set-goal", "--objective", "y"])
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+
+    def test_goal_07_set_goal_refused_while_complete(self):
+        self.seed_goal(status="complete")
+        proc = self.run_cli(["set-goal", "--objective", "y"])
+        self.assertNotEqual(proc.returncode, 0)
+
+    def test_goal_08_update_message_refused_on_complete(self):
+        self.seed_goal(status="complete")
+        self.seed(active_goal_id="aa11bb22")
+        proc = self.run_cli(["goal-update", "--message", "x"])
+        self.assertNotEqual(proc.returncode, 0)
+
+    def test_goal_09_resume_refused_on_complete_and_cleared(self):
+        self.seed_goal(status="complete")
+        proc = self.run_cli(["goal-resume"])
+        self.assertNotEqual(proc.returncode, 0)
+        goal = self.load_goal()
+        goal["status"] = "cleared"
+        goal.pop("hmac", None)
+        msg = json.dumps(
+            goal, sort_keys=True, separators=(",", ":"), ensure_ascii=True
+        ).encode("utf-8")
+        goal["hmac"] = hmac.new(self.secret, msg, hashlib.sha256).hexdigest()
+        with open(
+            os.path.join(self.goal_dir(), goal["goal_id"] + ".json"), "w"
+        ) as fh:
+            json.dump(goal, fh)
+        proc = self.run_cli(["goal-resume"])
+        self.assertNotEqual(proc.returncode, 0)
+
+    def test_goal_10_claim_done_records_claim_not_completion(self):
+        self.set_goal()
+        proc = self.run_cli(["goal-update", "--claim-done"])
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        goal = self.load_goal()
+        self.assertEqual(goal["status"], "active")
+        self.assertTrue(any(u.get("kind") == "claim" for u in goal["updates"]))
+
+    def test_goal_11_claim_while_paused_refused(self):
+        self.set_goal()
+        self.run_cli(["goal-pause", "--reason", "break"])
+        proc = self.run_cli(["goal-update", "--claim-done"])
+        self.assertNotEqual(proc.returncode, 0)
+
+    def test_goal_12_resume_attaches_other_session(self):
+        self.set_goal()
+        self.run_cli(["goal-pause", "--reason", "break"])
+        proc = self.run_cli(
+            ["goal-resume"], extra_env={"DEVIN_SESSION_ID": "other-session"}
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        st = gates.load_state("other-session")
+        self.assertEqual(st.get("active_goal_id"), self.load_goal()["goal_id"])
+        self.assertEqual(self.load_goal()["status"], "active")
+
+    def test_goal_13_resume_on_active_is_attach_noop(self):
+        self.set_goal()
+        proc = self.run_cli(
+            ["goal-resume"], extra_env={"DEVIN_SESSION_ID": "other-session"}
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        st = gates.load_state("other-session")
+        self.assertEqual(st.get("active_goal_id"), self.load_goal()["goal_id"])
+        self.assertEqual(self.load_goal()["status"], "active")
+
+    def test_goal_14_status_reports_attachment(self):
+        self.set_goal()
+        proc = self.run_cli(
+            ["goal-status"], extra_env={"DEVIN_SESSION_ID": "other-session"}
+        )
+        self.assertIn("attached: no", proc.stdout)
+        proc = self.run_cli(["goal-status"])
+        self.assertIn("attached: yes", proc.stdout)
+        self.assertIn("goal_allow_root=", proc.stdout)
+        self.assertIn("objective=", proc.stdout)
+
+    def test_goal_15_allow_root_write_attached(self):
+        self.set_goal()
+        root = self.load_goal()["allow_root"]
+        path = os.path.join(root, "checklist.md")
+        proc = self.run_hook(
+            pre("write", {"file_path": path, "content": "- [ ] item\n"})
+        )
+        self.assert_allow(proc)
+
+    def test_goal_16_allow_root_write_unattached_blocked(self):
+        self.set_goal()
+        root = self.load_goal()["allow_root"]
+        path = os.path.join(root, "checklist.md")
+        proc = self.run_hook(
+            pre(
+                "write",
+                {"file_path": path, "content": "x"},
+                session_id="other-session",
+            )
+        )
+        self.assert_block(proc, 0)
+
+    def test_goal_17_symlink_escape_from_goal_root(self):
+        self.set_goal()
+        root = self.load_goal()["allow_root"]
+        target = os.path.join(self.workspace, "src", "main.py")
+        with open(target, "w", encoding="utf-8") as fh:
+            fh.write("orig\n")
+        link = os.path.join(root, "escape.py")
+        os.symlink(target, link)
+        proc = self.run_hook(
+            pre("write", {"file_path": link, "content": "pwned\n"})
+        )
+        self.assert_block(proc, 0)
+
+    def test_goal_18_exec_goal_subcommand_allowed_while_locked(self):
+        cmd = "%s %s set-goal --objective x" % (sys.executable, self.gate_py)
+        proc = self.run_hook(pre("exec", {"command": cmd}))
+        self.assert_allow(proc)
+
+    def test_goal_19_exec_goal_substitution_blocked(self):
+        cmd = "%s %s set-goal --objective $(touch pwned)" % (
+            sys.executable,
+            self.gate_py,
+        )
+        proc = self.run_hook(pre("exec", {"command": cmd}))
+        self.assert_block(proc, 0)
+
+    def test_goal_20_planted_exec_under_goal_root_blocked(self):
+        self.set_goal()
+        root = self.load_goal()["allow_root"]
+        planted = os.path.join(root, "ls")
+        proc = self.run_hook(
+            pre("write", {"file_path": planted, "content": "#!/bin/sh\necho pwned\n"})
+        )
+        self.assert_allow(proc)
+        proc = self.run_hook(pre("exec", {"command": planted}))
+        self.assert_block(proc, 0)
+
+    def test_goal_21_concurrent_set_goal_single_winner(self):
+        env = self.env.copy()
+        cmd = [
+            sys.executable,
+            self.gate_py,
+            "set-goal",
+            "--objective",
+            "race",
+        ]
+        p1 = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            env=env,
+            cwd=self.tmpdir,
+        )
+        p2 = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            env=env,
+            cwd=self.tmpdir,
+        )
+        p1.communicate()
+        p2.communicate()
+        rcs = sorted([p1.returncode, p2.returncode])
+        self.assertEqual(rcs[0], 0)
+        self.assertNotEqual(rcs[1], 0)
+        self.assertEqual(len(self.goal_files()), 1)
+
+    def test_goal_22_session_end_detaches(self):
+        self.set_goal()
+        self.assertIsNotNone(self.load_st().get("active_goal_id"))
+        proc = self.run_hook(
+            {
+                "hook_event_name": "SessionEnd",
+                "session_id": SESSION,
+                "prompt_id": PROMPT,
+            }
+        )
+        self.assert_allow(proc)
+        self.assertIsNone(self.load_st().get("active_goal_id"))
+        audit_path = os.path.join(self.state_dir, "audit.jsonl")
+        with open(audit_path, "r", encoding="utf-8") as fh:
+            self.assertIn("goal_active_at_session_end", fh.read())
+
+    def test_goal_23_patch_idempotent(self):
+        proc = subprocess.run(
+            [
+                sys.executable,
+                os.path.join(ROOT, "hooks", "apply_goal_patch.py"),
+                self.gate_py,
+            ],
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertIn("already applied", proc.stdout)
+
+    def test_goal_24_blocked_transition_and_resume(self):
+        self.set_goal()
+        proc = self.run_cli(["goal-update", "--blocked", "--reason", "stuck"])
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        goal = self.load_goal()
+        self.assertEqual(goal["status"], "blocked")
+        self.assertEqual(goal["blocked_reason"], "stuck")
+        proc = self.run_cli(["goal-update", "--message", "still stuck"])
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        proc = self.run_cli(["goal-resume"])
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        goal = self.load_goal()
+        self.assertEqual(goal["status"], "active")
+        self.assertIsNone(goal["blocked_reason"])
+
+    def test_goal_25_unattached_update_and_pause_refused_clear_ok(self):
+        self.set_goal()
+        other = {"DEVIN_SESSION_ID": "other-session"}
+        proc = self.run_cli(["goal-update", "--message", "x"], extra_env=other)
+        self.assertNotEqual(proc.returncode, 0)
+        proc = self.run_cli(["goal-pause", "--reason", "x"], extra_env=other)
+        self.assertNotEqual(proc.returncode, 0)
+        proc = self.run_cli(["goal-clear", "--reason", "x"], extra_env=other)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(self.load_goal()["status"], "cleared")
+
+    def test_goal_26_embedded_metachars_blocked_while_locked(self):
+        # shlex keeps "x;id" as one token; the raw-command metachar scan must
+        # catch embedded ;|&>< and $VAR before the exec allowlist allows it.
+        for tail in (
+            "x;id",
+            "a|id",
+            "f>out.txt",
+            "a&id",
+            "$HOME",
+            "x`id`",
+        ):
+            with self.subTest(tail=tail):
+                cmd = "%s %s goal-status %s" % (sys.executable, self.gate_py, tail)
+                proc = self.run_hook(pre("exec", {"command": cmd}))
+                self.assert_block(proc, 0)
+
+    def test_goal_27_unsafe_session_id_never_attaches(self):
+        self.set_goal()
+        proc = self.run_cli(
+            ["goal-status"], extra_env={"DEVIN_SESSION_ID": "../../tmp/evil"}
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertIn("attached: no", proc.stdout)
+        proc = self.run_cli(
+            ["goal-update", "--message", "x"],
+            extra_env={"DEVIN_SESSION_ID": "../../tmp/evil"},
+        )
+        self.assertNotEqual(proc.returncode, 0)
+        # No state file was written outside the sessions dir.
+        self.assertFalse(os.path.lexists(os.path.join(self.tmpdir, "evil")))
+
+    def test_goal_28_status_rejects_positionals(self):
+        self.set_goal()
+        proc = self.run_cli(["goal-status", "junk"])
+        self.assertNotEqual(proc.returncode, 0)
+
+    def test_goal_29_mixed_update_flags_refused(self):
+        self.set_goal()
+        proc = self.run_cli(["goal-update", "--claim-done", "--message", "x"])
+        self.assertNotEqual(proc.returncode, 0)
+        proc = self.run_cli(["goal-update", "--claim-done", "--blocked"])
+        self.assertNotEqual(proc.returncode, 0)
+        proc = self.run_cli(["goal-update"])
+        self.assertNotEqual(proc.returncode, 0)
+
+    def test_goal_30_mutation_seq_increments_on_save(self):
+        self.set_goal()
+        seq0 = self.load_goal()["mutation_seq"]
+        self.run_cli(["goal-update", "--message", "x"])
+        seq1 = self.load_goal()["mutation_seq"]
+        self.assertGreater(seq1, seq0)
 
 
 if __name__ == "__main__":

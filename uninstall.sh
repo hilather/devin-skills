@@ -280,6 +280,9 @@ def remove_copied_gate():
     path = os.path.join(PREFIX, "hooks", "devin-gates.py")
     if os.path.islink(path) or os.path.isfile(path):
         os.remove(path)
+    goal = os.path.join(PREFIX, "hooks", "devin_gates_goal.py")
+    if os.path.islink(goal) or os.path.isfile(goal):
+        os.remove(goal)
 
 
 def main():

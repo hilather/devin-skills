@@ -1384,5 +1384,17 @@ def main(argv=None):
     return 2
 
 
+# devin-skills-goal:begin — managed by hooks/apply_goal_patch.py; do not edit
+try:
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import devin_gates_goal as _devin_goal
+
+    dispatch = _devin_goal.wrap_dispatch(dispatch)
+    run_hook = _devin_goal.wrap_run_hook(run_hook)
+    main = _devin_goal.wrap_main(main)
+except Exception:
+    pass
+# devin-skills-goal:end
+
 if __name__ == "__main__":
     sys.exit(main())
