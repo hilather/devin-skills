@@ -71,9 +71,8 @@ For each **BLOCKING** finding: revise the plan (fix wrong steps, add missing one
 
 Where you may write the revised plan:
 
-- `write_plan` if this session is still in plan mode (unusual after `exit_plan_mode`).
-- The Devin plan file under `~/.devin/plans/` (path-allowlisted while locked).
-- A copy under this session's `design_allow_root` if that root is already set.
+- **After `exit_plan_mode` (typical for this skill): forbid `write_plan`.** Edit the Devin plan file under `~/.devin/plans/` (path-allowlisted while locked), or a copy under this session's `design_allow_root` if that root is already set. `write_plan` sets `mode=plan`; Stop is then approved without a `code-passed` marker even after later implementation.
+- **`write_plan` only while still in builtin plan mode (pre-approval).** The parent has no status field for `mode`; if `exit_plan_mode` already ran this session, do not use `write_plan`.
 
 Do **not** write a plan copy into the workspace repo. That is blocked while locked and is the wrong place after unlock too — do not unlock the workspace just to edit a plan.
 
@@ -104,5 +103,5 @@ The profile forbids rubber-stamping, but the parent writes the task. Instructing
 - Do not spawn `finding-skeptic` or `code-skeptic` from this skill.
 - Do not call `mint-plan` to override a FAIL. Auto-mint on PASS only.
 - Parent does not self-review. Spawning is mandatory.
-- Plan-file writes only under `~/.devin/plans/` or `design_allow_root`.
+- Plan-file writes only under `~/.devin/plans/` or `design_allow_root`. After `exit_plan_mode`, do not call `write_plan` (Stop-exemption footgun).
 - Builtin `/plan` is the planner. Do not create a skill named `plan`.

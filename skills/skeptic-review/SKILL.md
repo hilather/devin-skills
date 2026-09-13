@@ -24,7 +24,17 @@ If `plan-skeptic` is `missing` (no `plan-passed`), **stop**. Tell the user to ru
 
 Skeptics have **no `exec`**. You must gather the patch and **embed the full patch text** in every skeptic `task`. Do not tell the skeptic to run a command to produce it. Do not pass “the command to produce the diff.”
 
-Default range: `git diff` (working tree). If the user passed a range (argument or prose), use that (`git diff main...HEAD`, a SHA range, etc.). `git diff` / `git status` are allowed even before unlock; this skill should already be past `plan-passed`.
+Honor a user-supplied range (argument or prose) when present (`git diff main...HEAD`, a SHA range, etc.).
+
+Otherwise gather the **full frozen candidate**, not unstaged-only `git diff` (that misses `git add` / `git commit`, which are **not** source mutations, so `source_seq` stays `> 0` and a PASS still auto-mints):
+
+1. `git status` (what's dirty vs HEAD).
+2. `git diff HEAD` (unstaged **and** staged vs last commit).
+3. If this branch is ahead of its merge base (`main` / `master` / the user-named base), also `git diff <base>...HEAD` (committed implementation on the branch). Concatenate so the paste covers working tree + index + commits since the base.
+
+`git diff` / `git status` are allowed even before unlock; this skill should already be past `plan-passed`.
+
+If the gathered patch is **empty** (or clearly not the work) while `source_seq > 0`, **stop and ask**. Do not spawn. An empty paste plus a live `source_seq` would mint `code-passed` without the skeptic seeing the change.
 
 If the patch was truncated (tool output limits, huge diff), say so in the **user-visible** output. That truncation is an honest gap — do not invent missing hunks, and tell the skeptic the paste may be incomplete.
 
@@ -112,7 +122,7 @@ The parent writes the task and pastes the diff. Instructing PASS, or pasting a t
 ## Rules
 
 - Omit `resume` for every skeptic. `is_background: false`.
-- Embed the full patch; skeptics have no `exec`.
+- Embed the full patch (`git status` + `git diff HEAD` + merge-base range unless the user named one); skeptics have no `exec`. Empty paste while `source_seq > 0` → stop and ask; do not spawn.
 - finding-skeptic then code-skeptic; never skip code-skeptic.
 - After any source fix, a new code-skeptic PASS is required (`source_seq` cleared the marker).
 - Do not call `mint-code --resolved-blockers`. Auto-mint on PASS only, with the source_seq guards.
