@@ -1,15 +1,19 @@
 # Live Devin smoke test
 
-Optional checklist on a **throwaway repo**. Unit tests (`python3 -m unittest tests.test_install_merge tests.test_gate -v`) are the merge gate; this confirms the lock against a real Devin session.
+Optional checklist on a **throwaway repo**. Unit tests are the merge gate:
 
-Use a throwaway git repo, not this one, so a failed lock cannot rewrite `devin-gates.py`.
+```sh
+python3 -m unittest tests.test_install_merge tests.test_gate -v
+```
+
+This checklist confirms the lock against a real Devin session. Use a throwaway git repo, not this one, so a failed lock cannot rewrite `devin-gates.py`.
 
 Default is locked. Builtin `/plan` stays the planner. Do not create a skill named `plan`. Do not ship `/goal`.
 
 ## 0. Install
 
 - [ ] `sh install.sh` from this repo (or `--prefix` / `--src` as in [install.md](install.md)).
-- [ ] In Devin, `/hooks` lists **both** `herdr-agent-state.sh` and `devin-gates.py`.
+- [ ] In Devin, `/hooks` lists **both** `herdr-agent-state.sh` (if you had it) and `devin-gates.py`.
 - [ ] herdr command strings look unchanged. Gate is one dispatcher per event, herdr first.
 
 ## 1. Write blocked (no `/plan`)
