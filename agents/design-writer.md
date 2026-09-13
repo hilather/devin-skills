@@ -77,19 +77,16 @@ Include `## PR Plan` at the bottom. Break the design into concrete, ordered pull
 
 ## Output format
 
-End the result with **complete** files in fenced markdown blocks so the parent can copy them. Do not instruct anyone to call `write`. If the output would truncate, say so and wait for resume rather than omitting a required section.
+The parent copies **one outer fenced block per artifact**. Inner Mermaid and code snippets use the usual three-backtick fences. The outer wrapper MUST use **four or more backticks** (e.g. four backticks immediately followed by `markdown`) so it does not close at the first inner ` ``` `. Never put that outer delimiter sequence inside the artifact; if the body would contain four backticks, use five (or more) on the outer fence so the closer is longer than any inner run.
 
-On a first draft, emit exactly two fenced blocks, in this order:
+Do not instruct anyone to call `write`. If the output would truncate, say so and wait for resume rather than omitting a required section.
 
-1. Design document: ` ```markdown ` fence. First line inside the fence is a comment or heading; the body is the full doc including Key Decisions and PR Plan.
-2. Summary: a second ` ```markdown ` fence with a short summary of what was produced.
+On a first draft **and** on a revision, emit exactly two outer-fenced blocks, in this order:
 
-On a revision, emit:
+1. Design document (four-or-more-backtick `markdown` fence). Body is the full doc including Key Decisions, PR Plan, Mermaid, and code snippets — complete file, not a diff.
+2. Second artifact, same outer-fence rule: first draft → short summary of what was produced; revision → complete updated review notes (every issue with Status/Response, plus Revision Summary).
 
-1. The complete updated design document (full file, not a diff).
-2. The complete updated review notes (every issue with Status/Response, plus Revision Summary).
-
-If the task asks for only one of those, still return complete file(s), never a partial splice.
+If the task asks for only one of those, still return complete file(s) with the same outer-fence rule, never a partial splice.
 
 ## Rules
 

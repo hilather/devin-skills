@@ -70,7 +70,9 @@ When the parent resumes you with writer responses:
 
 ## Output format
 
-End the result with the **complete** review notes in one ` ```markdown ` fenced block so the parent can copy them. Do not call `write`. If output would truncate, say so and wait for resume.
+The parent copies **one outer fenced block**. Quoted code in the notes uses the usual three-backtick fences. The outer wrapper MUST use **four or more backticks** (e.g. four backticks immediately followed by `markdown`) so it does not close at the first inner ` ``` `. Never put that outer delimiter sequence inside the notes; if the body would contain four backticks, use five (or more) on the outer fence so the closer is longer than any inner run.
+
+End the result with the **complete** review notes in that one outer block (first review and re-review). Do not call `write`. If output would truncate, say so and wait for resume.
 
 In the unfenced text before the block, state the count of `Status: open` issues and the verdict.
 
