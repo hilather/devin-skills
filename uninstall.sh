@@ -91,8 +91,8 @@ from __future__ import annotations
 
 import json
 import os
-import re
 import shutil
+import stat
 import sys
 
 PREFIX = os.path.realpath(os.environ["DEVIN_SKILLS_INSTALL_PREFIX"])
@@ -130,33 +130,61 @@ def has_gates_command(obj):
 
 def unmerge_hooks_obj(hooks):
     if not isinstance(hooks, dict):
-        return hooks
+        return hooks, False
+    changed = False
     for event in list(hooks.keys()):
         val = hooks[event]
         if not isinstance(val, list):
             continue
         kept = [el for el in val if not has_gates_command(el)]
+        if len(kept) == len(val):
+            continue
+        changed = True
         if kept:
             hooks[event] = kept
         else:
             del hooks[event]
-    return hooks
+    return hooks, changed
 
 
-def dump_json(path, obj):
-    tmp = path + ".tmp-devin-skills"
-    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o644)
+def existing_mode(path, default):
     try:
-        with os.fdopen(fd, "w", encoding="utf-8") as fh:
-            json.dump(obj, fh, indent=2, ensure_ascii=False)
-            fh.write("\n")
+        st = os.lstat(path)
+    except OSError:
+        return default
+    if stat.S_ISLNK(st.st_mode):
+        return default
+    return stat.S_IMODE(st.st_mode)
+
+
+def atomic_write_regular(path, data, mode):
+    """Replace path with a regular file; never write through a dest symlink."""
+    if isinstance(data, str):
+        data = data.encode("utf-8")
+    tmp = path + ".tmp-devin-skills"
+    if os.path.islink(tmp) or os.path.isfile(tmp):
+        os.remove(tmp)
+    flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_NOFOLLOW", 0)
+    fd = os.open(tmp, flags, mode)
+    try:
+        os.write(fd, data)
     except Exception:
+        os.close(fd)
         try:
             os.unlink(tmp)
         except OSError:
             pass
         raise
+    os.close(fd)
+    os.chmod(tmp, mode)
     os.replace(tmp, path)
+    os.chmod(path, mode)
+
+
+def dump_json(path, obj):
+    mode = existing_mode(path, 0o600)
+    payload = json.dumps(obj, indent=2, ensure_ascii=False) + "\n"
+    atomic_write_regular(path, payload, mode)
 
 
 def unmerge_user_config():
@@ -171,8 +199,11 @@ def unmerge_user_config():
     if not isinstance(cfg, dict):
         return
     hooks = cfg.get("hooks")
-    if isinstance(hooks, dict):
-        cfg["hooks"] = unmerge_hooks_obj(hooks)
+    if not isinstance(hooks, dict):
+        return
+    cfg["hooks"], changed = unmerge_hooks_obj(hooks)
+    if not changed:
+        return
     dump_json(config_path, cfg)
 
 
@@ -187,34 +218,33 @@ def unmerge_project_hooks():
             fail("cannot parse %s: %s" % (path, exc))
     if not isinstance(hooks, dict):
         return
-    hooks = unmerge_hooks_obj(hooks)
-    if hooks:
-        dump_json(path, hooks)
-    else:
+    hooks, changed = unmerge_hooks_obj(hooks)
+    if not hooks:
         os.remove(path)
+    elif changed:
+        dump_json(path, hooks)
 
 
 def restore_agents_md(path):
-    if not os.path.isfile(path):
+    if not (os.path.islink(path) or os.path.isfile(path)):
         return
-    with open(path, "r", encoding="utf-8") as fh:
-        text = fh.read()
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            text = fh.read()
+    except OSError:
+        return
     start = text.find(BEGIN)
     end = text.find(END)
     if start == -1 or end == -1 or end < start:
         return
     end_at = end + len(END)
     text = text[:start] + text[end_at:]
-    text = re.sub(r"\n{3,}", "\n\n", text)
-    text = text.strip("\n")
-    if text:
-        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o644)
-        try:
-            os.write(fd, (text + "\n").encode("utf-8"))
-        finally:
-            os.close(fd)
-    else:
-        os.remove(path)
+    if not text.strip():
+        if os.path.islink(path) or os.path.isfile(path):
+            os.remove(path)
+        return
+    mode = existing_mode(path, 0o644)
+    atomic_write_regular(path, text, mode)
 
 
 def is_our_symlink(dest, src):

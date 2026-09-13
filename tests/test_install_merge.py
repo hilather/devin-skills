@@ -82,6 +82,7 @@ class InstallMergeTest(unittest.TestCase):
         self.prefix = os.path.join(self.home, ".config", "devin")
         os.makedirs(self.prefix)
         shutil.copy(FIXTURE, os.path.join(self.prefix, "config.json"))
+        os.chmod(os.path.join(self.prefix, "config.json"), 0o600)
         self.herdr_dummy = os.path.join(self.prefix, "herdr-agent-state.sh")
         with open(self.herdr_dummy, "w", encoding="utf-8") as fh:
             fh.write("#!/bin/sh\n# dummy herdr; do not delete\nexit 0\n")
@@ -294,10 +295,57 @@ class InstallMergeTest(unittest.TestCase):
         installed = os.path.join(self.prefix, "hooks", "devin-gates.py")
         self.assertTrue(os.path.isfile(installed))
         self.assertFalse(os.path.islink(installed))
+        inst_st = os.stat(installed)
+        src_st = os.stat(GATE_SRC)
+        self.assertNotEqual((inst_st.st_ino, inst_st.st_dev), (src_st.st_ino, src_st.st_dev))
         with open(GATE_SRC, "rb") as fh:
             src_bytes = fh.read()
         with open(installed, "rb") as fh:
             self.assertEqual(fh.read(), src_bytes)
+
+    def test_preexisting_hardlink_is_replaced(self):
+        # tempfile HOME may be another device; hardlink to the repo source needs the same fs.
+        same_fs = tempfile.mkdtemp(
+            prefix="devin-skills-hl-",
+            dir=os.path.dirname(os.path.realpath(ROOT)),
+        )
+        try:
+            prefix = os.path.join(same_fs, "config", "devin")
+            os.makedirs(os.path.join(prefix, "hooks"))
+            shutil.copy(FIXTURE, os.path.join(prefix, "config.json"))
+            os.chmod(os.path.join(prefix, "config.json"), 0o600)
+            installed = os.path.join(prefix, "hooks", "devin-gates.py")
+            os.link(GATE_SRC, installed)
+            src_st = os.stat(GATE_SRC)
+            self.assertEqual(
+                (os.stat(installed).st_ino, os.stat(installed).st_dev),
+                (src_st.st_ino, src_st.st_dev),
+            )
+            old_prefix = self.prefix
+            self.prefix = prefix
+            try:
+                self.install()
+            finally:
+                self.prefix = old_prefix
+            inst_st = os.stat(installed)
+            self.assertNotEqual((inst_st.st_ino, inst_st.st_dev), (src_st.st_ino, src_st.st_dev))
+            self.assertFalse(os.path.islink(installed))
+            with open(installed, "ab") as fh:
+                fh.write(b"\n# mutated dest\n")
+            with open(GATE_SRC, "rb") as fh:
+                self.assertNotIn(b"mutated dest", fh.read())
+        finally:
+            shutil.rmtree(same_fs, ignore_errors=True)
+
+    def test_config_json_stays_0600(self):
+        path = os.path.join(self.prefix, "config.json")
+        self.assertEqual(stat.S_IMODE(os.stat(path).st_mode), 0o600)
+        self.install()
+        self.assertEqual(stat.S_IMODE(os.stat(path).st_mode), 0o600)
+        self.uninstall()
+        self.assertEqual(stat.S_IMODE(os.stat(path).st_mode), 0o600)
+        self.uninstall()
+        self.assertEqual(stat.S_IMODE(os.stat(path).st_mode), 0o600)
 
     def test_install_hash_and_source_realpath(self):
         self.install()
@@ -355,6 +403,44 @@ class InstallMergeTest(unittest.TestCase):
         self.assertNotIn(END, restored)
         self.assertIn("# keep me", restored)
         self.assertIn("user rule", restored)
+
+    def test_agents_md_preserves_blank_lines_outside_span(self):
+        agents_path = os.path.join(self.prefix, "AGENTS.md")
+        original = "# keep me\n\n\nuser rule\n\n"
+        with open(agents_path, "w", encoding="utf-8") as fh:
+            fh.write(original)
+        self.install()
+        self.uninstall()
+        with open(agents_path, "r", encoding="utf-8") as fh:
+            restored = fh.read()
+        self.assertIn("# keep me\n\n\nuser rule", restored)
+        self.assertNotIn(BEGIN, restored)
+        self.assertNotIn(END, restored)
+
+    def test_agents_md_symlink_replaced_not_followed(self):
+        real = os.path.join(self.tmpdir, "dotfiles", "AGENTS.md")
+        os.makedirs(os.path.dirname(real), exist_ok=True)
+        with open(real, "w", encoding="utf-8") as fh:
+            fh.write("# from dotfiles\n")
+        agents_path = os.path.join(self.prefix, "AGENTS.md")
+        os.symlink(real, agents_path)
+        self.install()
+        self.assertFalse(os.path.islink(agents_path))
+        self.assertTrue(os.path.isfile(agents_path))
+        with open(real, "r", encoding="utf-8") as fh:
+            self.assertEqual(fh.read(), "# from dotfiles\n")
+        with open(agents_path, "r", encoding="utf-8") as fh:
+            installed = fh.read()
+        self.assertIn("# from dotfiles", installed)
+        self.assertIn(BEGIN, installed)
+        self.uninstall()
+        self.assertFalse(os.path.islink(agents_path))
+        with open(real, "r", encoding="utf-8") as fh:
+            self.assertEqual(fh.read(), "# from dotfiles\n")
+        with open(agents_path, "r", encoding="utf-8") as fh:
+            restored = fh.read()
+        self.assertIn("# from dotfiles", restored)
+        self.assertNotIn(BEGIN, restored)
 
     def test_skip_missing_skills_and_agents(self):
         self.assertFalse(os.path.isdir(os.path.join(ROOT, "skills")))
@@ -448,7 +534,15 @@ class InstallMergeTest(unittest.TestCase):
     def test_uninstall_idempotent(self):
         self.install()
         self.uninstall()
+        path = os.path.join(self.prefix, "config.json")
+        with open(path, "rb") as fh:
+            before = fh.read()
+        before_mode = stat.S_IMODE(os.stat(path).st_mode)
         self.uninstall()
+        with open(path, "rb") as fh:
+            after = fh.read()
+        self.assertEqual(after, before)
+        self.assertEqual(stat.S_IMODE(os.stat(path).st_mode), before_mode)
         cfg = self.config()
         self.assertEqual(set(cfg["hooks"].keys()), set(HERDR_EVENTS))
 

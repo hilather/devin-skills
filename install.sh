@@ -91,10 +91,8 @@ mkdir -p "$STATE_DIR"
 chmod 700 "$STATE_DIR" 2>/dev/null || true
 
 INSTALLED_GATE=$PREFIX/hooks/devin-gates.py
-if [ -L "$INSTALLED_GATE" ]; then
-  # cp would write through a symlink into the repo
-  rm -f "$INSTALLED_GATE"
-fi
+# Drop a dest symlink or hardlink first; cp would otherwise write through into the repo.
+rm -f "$INSTALLED_GATE"
 cp "$SRC/hooks/devin-gates.py" "$INSTALLED_GATE"
 
 export DEVIN_SKILLS_INSTALL_PREFIX="$PREFIX"
@@ -113,6 +111,7 @@ import hashlib
 import json
 import os
 import shutil
+import stat
 import sys
 import time
 
@@ -133,17 +132,44 @@ def fail(msg):
     sys.exit(1)
 
 
-def write_mode(path, data, mode, binary=False):
-    flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
-    fd = os.open(path, flags, mode)
+def existing_mode(path, default):
     try:
-        if binary:
-            os.write(fd, data)
-        else:
-            os.write(fd, data.encode("utf-8"))
-    finally:
+        st = os.lstat(path)
+    except OSError:
+        return default
+    if stat.S_ISLNK(st.st_mode):
+        return default
+    return stat.S_IMODE(st.st_mode)
+
+
+def atomic_write_regular(path, data, mode):
+    """Replace path with a regular file; never write through a dest symlink."""
+    if isinstance(data, str):
+        data = data.encode("utf-8")
+    tmp = path + ".tmp-devin-skills"
+    if os.path.islink(tmp) or os.path.isfile(tmp):
+        os.remove(tmp)
+    flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_NOFOLLOW", 0)
+    fd = os.open(tmp, flags, mode)
+    try:
+        os.write(fd, data)
+    except Exception:
         os.close(fd)
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+    os.close(fd)
+    os.chmod(tmp, mode)
+    os.replace(tmp, path)
     os.chmod(path, mode)
+
+
+def write_mode(path, data, mode):
+    if os.path.islink(path):
+        os.remove(path)
+    atomic_write_regular(path, data, mode)
 
 
 def iter_commands(obj):
@@ -210,19 +236,9 @@ def merge_hooks_obj(hooks, entries, installed):
 
 
 def dump_json(path, obj):
-    tmp = path + ".tmp-devin-skills"
-    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o644)
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as fh:
-            json.dump(obj, fh, indent=2, ensure_ascii=False)
-            fh.write("\n")
-    except Exception:
-        try:
-            os.unlink(tmp)
-        except OSError:
-            pass
-        raise
-    os.replace(tmp, path)
+    mode = existing_mode(path, 0o600)
+    payload = json.dumps(obj, indent=2, ensure_ascii=False) + "\n"
+    atomic_write_regular(path, payload, mode)
 
 
 def ensure_symlink(src, dest):
@@ -274,11 +290,19 @@ def wrap_agents(content):
 
 def merge_agents_md(dest_path, content):
     block = wrap_agents(content)
-    if not os.path.exists(dest_path):
-        write_mode(dest_path, block, 0o644)
+    mode = existing_mode(dest_path, 0o644)
+    text = None
+    if os.path.islink(dest_path) or os.path.isfile(dest_path):
+        try:
+            with open(dest_path, "r", encoding="utf-8") as fh:
+                text = fh.read()
+        except OSError:
+            text = ""
+    elif os.path.lexists(dest_path):
+        fail("refusing to clobber %s" % dest_path)
+    if text is None:
+        atomic_write_regular(dest_path, block, mode)
         return
-    with open(dest_path, "r", encoding="utf-8") as fh:
-        text = fh.read()
     start = text.find(BEGIN)
     end = text.find(END)
     if start != -1 and end != -1 and end > start:
@@ -292,7 +316,7 @@ def merge_agents_md(dest_path, content):
         if text and not text.endswith("\n\n"):
             text += "\n"
         text += block
-    write_mode(dest_path, text, 0o644)
+    atomic_write_regular(dest_path, text, mode)
 
 
 def ensure_secret():
@@ -370,6 +394,11 @@ def main():
     gate_path = os.environ["DEVIN_SKILLS_INSTALL_GATE"]
     if os.path.islink(gate_path) or not os.path.isfile(INSTALLED):
         fail("gate must be a regular file copy at %s" % gate_path)
+    src_gate = os.path.join(SRC, "hooks", "devin-gates.py")
+    inst_st = os.stat(INSTALLED)
+    src_st = os.stat(src_gate)
+    if (inst_st.st_ino, inst_st.st_dev) == (src_st.st_ino, src_st.st_dev):
+        fail("installed gate shares an inode with the source")
 
     entries_path = os.path.join(SRC, "hooks", "hook-entries.json")
     with open(entries_path, "r", encoding="utf-8") as fh:
