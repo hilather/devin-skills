@@ -36,6 +36,39 @@ LOCKED_GIT = (
 GIT_NON_SOURCE = LOCKED_GIT + ("add", "commit", "push", "fetch")
 LOCKED_RO_BINS = ("ls", "cat", "head", "tail", "wc", "file", "stat", "rg", "grep")
 TEST_RUNNER_MODS = ("pytest", "unittest")
+SYSTEM_BIN_DIRS = (
+    "/bin",
+    "/usr/bin",
+    "/usr/local/bin",
+    "/sbin",
+    "/usr/sbin",
+    "/opt/homebrew/bin",
+)
+GIT_GLOBAL_TAKES_ARG = (
+    "-C",
+    "-c",
+    "--git-dir",
+    "--work-tree",
+    "--namespace",
+    "--super-prefix",
+    "--config-env",
+    "--attr-source",
+    "--exec-path",
+)
+GIT_GLOBAL_FLAGS = (
+    "--no-pager",
+    "--paginate",
+    "--bare",
+    "--no-replace-objects",
+    "--no-optional-locks",
+    "--literal-pathspecs",
+    "--glob-pathspecs",
+    "--noglob-pathspecs",
+    "--icase-pathspecs",
+    "--no-advice",
+    "--no-lazy-fetch",
+)
+PATH_DELIM_CHARS = frozenset({os.sep, '"', "'", "\n", "\r", " ", "\t", ":"})
 MCP_LIST = ("mcp_list_servers", "mcp_list_tools")
 REMINDER_EVENTS = ("SessionStart", "UserPromptSubmit", "PostCompaction")
 MUTATING_PRE_TOOLS = {
@@ -332,10 +365,14 @@ def last_witness(state, kind):
     return None
 
 
-def is_write_locked(state):
+def has_escape(state):
     if gates_off():
-        return False
-    if (state.get("override_reason") or "").strip():
+        return True
+    return bool((state.get("override_reason") or "").strip())
+
+
+def is_write_locked(state):
+    if has_escape(state):
         return False
     if has_marker(state, "plan-passed"):
         return False
@@ -397,12 +434,44 @@ def path_hits(candidate, protected):
     return False
 
 
-def raw_json_hits_protected(tool_input, protected):
-    raw = canonical_dumps(tool_input or {})
+def _string_embeds_protected(text, protected):
+    if not text:
+        return False
     for prot in protected:
-        if prot and prot in raw:
+        if not prot:
+            continue
+        if text == prot or text.startswith(prot + os.sep):
             return True
+        if (prot + os.sep) in text:
+            return True
+        idx = 0
+        while True:
+            j = text.find(prot, idx)
+            if j < 0:
+                break
+            end = j + len(prot)
+            ok_end = end == len(text) or text[end] in PATH_DELIM_CHARS
+            ok_start = j == 0 or text[j - 1] in PATH_DELIM_CHARS
+            if ok_end and ok_start:
+                return True
+            idx = j + 1
     return False
+
+
+def json_values_hit_protected(obj, protected):
+    if isinstance(obj, dict):
+        return any(json_values_hit_protected(v, protected) for v in obj.values())
+    if isinstance(obj, list):
+        return any(json_values_hit_protected(v, protected) for v in obj)
+    if isinstance(obj, str):
+        if path_hits(obj, protected):
+            return True
+        return _string_embeds_protected(obj, protected)
+    return False
+
+
+def raw_json_hits_protected(tool_input, protected):
+    return json_values_hit_protected(tool_input or {}, protected)
 
 
 def text_hits_protected(text, protected):
@@ -518,6 +587,19 @@ def argv0_basename(token):
     return os.path.basename(text)
 
 
+def argv0_is_trusted_bin(token):
+    text = str(token or "")
+    if not text or text in (".", ".."):
+        return False
+    expanded = os.path.expanduser(text)
+    if os.sep not in expanded:
+        return True
+    rp = os.path.realpath(expanded)
+    parent = os.path.dirname(rp)
+    system = {os.path.realpath(d) for d in SYSTEM_BIN_DIRS}
+    return parent in system
+
+
 def is_gate_cli(argv):
     if len(argv) < 3:
         return False
@@ -548,16 +630,52 @@ def command_has_metachar(command):
     return False
 
 
+def _python_uses_dash_c(rest):
+    for tok in rest:
+        if tok == "-c":
+            return True
+        if tok == "--":
+            return False
+        if not str(tok).startswith("-"):
+            return False
+    return False
+
+
 def always_blocked_exec(command, argv):
     if "<<" in command:
         return True
-    if argv:
-        b0 = argv0_basename(argv[0])
-        if is_python_bin(b0) and len(argv) >= 2 and argv[1] == "-c":
+    argv = argv or []
+    for i, tok in enumerate(argv):
+        if is_python_bin(argv0_basename(tok)) and _python_uses_dash_c(argv[i + 1 :]):
             return True
-        if b0 == "devin" and "-p" in argv[1:]:
+        if argv0_basename(tok) == "devin" and "-p" in argv[i + 1 :]:
             return True
     return False
+
+
+def git_subcommand(argv):
+    if not argv or argv0_basename(argv[0]) != "git":
+        return None, -1
+    i = 1
+    n = len(argv)
+    while i < n:
+        tok = argv[i]
+        if tok == "--":
+            i += 1
+            break
+        if tok in GIT_GLOBAL_TAKES_ARG:
+            i += 2
+            continue
+        if any(tok.startswith(p + "=") for p in GIT_GLOBAL_TAKES_ARG if p.startswith("--")):
+            i += 1
+            continue
+        if tok in GIT_GLOBAL_FLAGS:
+            i += 1
+            continue
+        break
+    if i >= n:
+        return None, -1
+    return argv[i], i
 
 
 def token_hits_protected(token, protected, cwd=None):
@@ -594,11 +712,14 @@ def locked_exec_allowed(argv):
         return False
     if is_gate_cli(argv):
         return True
+    if not argv0_is_trusted_bin(argv[0]):
+        return False
     b0 = argv0_basename(argv[0])
     if b0 == "git":
-        if len(argv) < 2 or argv[1] not in LOCKED_GIT:
+        sub, idx = git_subcommand(argv)
+        if sub not in LOCKED_GIT:
             return False
-        for tok in argv[1:]:
+        for tok in argv[idx:]:
             if tok == "--output" or tok.startswith("--output=") or tok == "-o":
                 return False
         return True
@@ -610,9 +731,10 @@ def locked_exec_allowed(argv):
 def is_git_non_source(argv):
     if not argv or argv0_basename(argv[0]) != "git":
         return False
-    if len(argv) < 2:
+    if not argv0_is_trusted_bin(argv[0]):
         return False
-    return argv[1] in GIT_NON_SOURCE
+    sub, _idx = git_subcommand(argv)
+    return sub in GIT_NON_SOURCE
 
 
 def is_test_runner(argv):
@@ -725,16 +847,9 @@ def protected_hit_on_tool(tool_name, tool_input, protected):
     for path in extract_tool_paths(tool_name, inp):
         if path_hits(path, protected):
             return True
-    if tool_name in MUTATING_FILE_TOOLS or tool_name in (
-        "write_to_process",
-        "mcp_call_tool",
-        "mcp_read_resource",
-        "exec",
-    ):
+    if tool_name in ("write_to_process", "mcp_call_tool", "mcp_read_resource", "exec") or tool_name.startswith("mcp__"):
         if raw_json_hits_protected(inp, protected):
             return True
-    if tool_name.startswith("mcp__") and raw_json_hits_protected(inp, protected):
-        return True
     if tool_name == "write_to_process":
         if text_hits_protected(inp.get("text_input") or "", protected):
             return True
@@ -746,6 +861,7 @@ def protected_hit_on_tool(tool_name, tool_input, protected):
 def pre_write(state, tool_name, tool_input, session_id, event):
     inp = tool_input or {}
     protected = protected_paths()
+    escape = has_escape(state)
     if tool_name == "apply_patch":
         if is_write_locked(state):
             return block(
@@ -754,12 +870,12 @@ def pre_write(state, tool_name, tool_input, session_id, event):
                 event,
                 tool_name,
             )
-        if raw_json_hits_protected(inp, protected):
+        if not escape and raw_json_hits_protected(inp, protected):
             return block("Path is protected (state/secret/hooks/config/gate source).", session_id, event, tool_name)
         return allow()
 
     paths = extract_tool_paths(tool_name, inp)
-    if any(path_hits(p, protected) for p in paths) or raw_json_hits_protected(inp, protected):
+    if not escape and any(path_hits(p, protected) for p in paths):
         return block("Path is protected (state/secret/hooks/config/gate source).", session_id, event, tool_name)
 
     if not is_write_locked(state):

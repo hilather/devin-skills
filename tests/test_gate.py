@@ -224,8 +224,19 @@ class GateTest(unittest.TestCase):
         proc = self.run_hook(pre("exec", {"command": cmd}))
         self.assert_block(proc, 0)
 
+    def test_t06b_env_python3_c_blocked_after_unlock(self):
+        self.seed(markers=[self.plan_marker()])
+        proc = self.run_hook(pre("exec", {"command": "env python3 -c 'print(1)'"}))
+        self.assert_block(proc, 0)
+        proc = self.run_hook(pre("exec", {"command": "/usr/bin/env python3 -c 'print(1)'"}))
+        self.assert_block(proc, 0)
+        proc = self.run_hook(pre("exec", {"command": "env devin -p hi"}))
+        self.assert_block(proc, 0)
+
     def test_t07_exec_git_status_locked(self):
         proc = self.run_hook(load_fixture("exec_git_status.json"))
+        self.assert_allow(proc)
+        proc = self.run_hook(pre("exec", {"command": "git --no-pager status"}))
         self.assert_allow(proc)
 
     def test_t08_exec_git_commit_locked(self):
@@ -336,6 +347,14 @@ class GateTest(unittest.TestCase):
         proc = self.run_hook(self.write_payload(), extra_env={"DEVIN_GATES_OFF": "1"})
         self.assert_allow(proc)
 
+    def test_t19c_gates_off_allows_protected_write(self):
+        secret = os.path.join(self.state_dir, "secret")
+        proc = self.run_hook(
+            pre("write", {"file_path": secret, "content": "x"}),
+            extra_env={"DEVIN_GATES_OFF": "1"},
+        )
+        self.assert_allow(proc)
+
     def test_t19b_tool_input_env_gates_off_ignored(self):
         payload = self.write_payload()
         payload["tool_input"]["env"] = {"DEVIN_GATES_OFF": "1"}
@@ -371,6 +390,15 @@ class GateTest(unittest.TestCase):
     def test_t21d_apply_patch_unlocked_fail_open(self):
         self.seed(markers=[self.plan_marker()])
         proc = self.run_hook(load_fixture("apply_patch_unknown.json"))
+        self.assert_allow(proc)
+
+    def test_t21f_write_content_mentioning_state_dir_after_unlock(self):
+        self.seed(markers=[self.plan_marker()])
+        content = "notes about %s and %s-backup\n" % (
+            os.path.realpath(self.state_dir),
+            os.path.realpath(self.state_dir),
+        )
+        proc = self.run_hook(self.write_payload(content=content))
         self.assert_allow(proc)
 
     def test_t21e_apply_patch_unlocked_protected_scan(self):
@@ -478,6 +506,18 @@ class GateTest(unittest.TestCase):
         refuse = self.run_cli(["allow-design", "--file", path])
         self.assertNotEqual(refuse.returncode, 0)
 
+    def test_t32b_exec_planted_ls_under_design_root_locked(self):
+        proc = self.run_cli(["allow-design", "--id", "abcd1234"])
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        root = self.load_st().get("design_allow_root")
+        planted = os.path.join(root, "ls")
+        proc = self.run_hook(pre("write", {"file_path": planted, "content": "#!/bin/sh\necho pwned\n"}))
+        self.assert_allow(proc)
+        proc = self.run_hook(pre("exec", {"command": planted}))
+        self.assert_block(proc, 0)
+        proc = self.run_hook(pre("exec", {"command": "./ls"}))
+        self.assert_block(proc, 0)
+
     def test_t32_symlink_escape_from_cache_root(self):
         proc = self.run_cli(["allow-design", "--id", "abcd1234"])
         self.assertEqual(proc.returncode, 0, proc.stderr)
@@ -538,6 +578,16 @@ class GateTest(unittest.TestCase):
         self.assertTrue(any(w.get("kind") == "code" and w.get("verdict") == "PASS" for w in (st.get("witnesses") or [])))
         self.assertEqual(int(st.get("source_seq") or 0), 0)
 
+    def test_t41b_code_skeptic_pass_plan_passed_source_seq_zero_no_mint(self):
+        self.seed(markers=[self.plan_marker()], source_seq=0, mutations=0)
+        payload = load_fixture("synthetic_code_skeptic_pass_post.json")
+        proc = self.run_hook(payload)
+        self.assert_allow(proc)
+        st = self.load_st()
+        self.assertNotIn("code-passed", self.marker_kinds())
+        self.assertTrue(any(w.get("kind") == "code" and w.get("verdict") == "PASS" for w in (st.get("witnesses") or [])))
+        self.assertEqual(int(st.get("source_seq") or 0), 0)
+
     def test_t42_code_passed_cleared_on_later_write(self):
         self.seed(markers=[self.plan_marker()], source_seq=1, mutations=1)
         payload = load_fixture("synthetic_code_skeptic_pass_post.json")
@@ -583,6 +633,16 @@ class GateTest(unittest.TestCase):
             ],
         )
         proc = self.run_hook(post("exec", {"command": "git commit -am wip"}, output="ok"))
+        self.assert_allow(proc)
+        st = self.load_st()
+        self.assertIn("code-passed", self.marker_kinds())
+        self.assertEqual(int(st.get("source_seq") or 0), 1)
+        proc = self.run_hook(post("exec", {"command": "git --no-pager commit -am wip"}, output="ok"))
+        self.assert_allow(proc)
+        st = self.load_st()
+        self.assertIn("code-passed", self.marker_kinds())
+        self.assertEqual(int(st.get("source_seq") or 0), 1)
+        proc = self.run_hook(post("exec", {"command": "git -C . commit -am wip"}, output="ok"))
         self.assert_allow(proc)
         st = self.load_st()
         self.assertIn("code-passed", self.marker_kinds())
