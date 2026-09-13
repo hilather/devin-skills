@@ -159,8 +159,6 @@ Everyday loop, in Devin:
 3. **Implement.** Devin can edit now.
 4. **`/skeptic-review`**. A finding-skeptic, then a code-skeptic, review a frozen diff. Stop unlocks only on a code-skeptic PASS.
 
-Optional: **`/design`** before `/plan` when you want a spec. That skill's output is the **PR Plan** — the execution plan. It does not implement. Take each `### PR N:` through `/plan` → `/skeptic-plan` → implement → `/skeptic-review`.
-
 Check the lock any time:
 
 ```
@@ -175,7 +173,35 @@ A one-line typo, a docs tweak, a test you need before the skeptic:
 
 New session? Locked again. Bypass is per-session.
 
-Step-by-step with examples: **[docs/usage.md](docs/usage.md)**.
+### How to use /design
+
+Use this **before** `/plan` when the change needs a spec (architecture, migration, a feature you'd actually write down). Skip it for typos and small bugs.
+
+```
+/design replace the sync job with a queue worker. Keep the existing Job row shape. No new infra.
+```
+
+Put the problem, constraints, and paths in the argument. Vague prompt → vague spec.
+
+What happens:
+
+1. Devin asks the gate for a design folder. Workspace source stays **locked**.
+2. A read-only **writer** drafts the spec. A read-only **reviewer** attacks it.
+3. They loop until zero open issues. Nits count. No round cap.
+4. If the reviewer needs a product call, Devin **stops and asks you**. Answer it — that call is final.
+5. When it finishes, Devin prints the doc path, **Key Decisions**, and the **PR Plan**.
+
+You get files under `~/.cache/devin-skills/design/<id>/`:
+
+| File | What it is |
+| --- | --- |
+| `design-doc.md` | The spec. Always includes Key Decisions and a PR Plan. |
+| `summary.md` | Short writer's summary. |
+| `review.md` | Review notes (open / addressed / wontfix). |
+
+Then **stop using `/design`**. It does not implement. Take the first `### PR N:` through `/plan` → `/skeptic-plan` → implement → `/skeptic-review`.
+
+Full walkthrough: **[docs/usage.md](docs/usage.md#how-to-use-design)**.
 
 ## Commands
 
@@ -229,7 +255,7 @@ Live Devin checklist (throwaway repo): **[docs/smoke-test.md](docs/smoke-test.md
 
 | Doc | What's in it |
 | --- | --- |
-| [docs/usage.md](docs/usage.md) | Everyday workflow, commands, bypass, FAQ |
+| [docs/usage.md](docs/usage.md) | Everyday workflow, **how to use /design**, commands, bypass, FAQ |
 | [docs/install.md](docs/install.md) | Install, flags, herdr, project mode |
 | [docs/uninstall.md](docs/uninstall.md) | Clean removal and backup restore |
 | [docs/how-it-works.md](docs/how-it-works.md) | Layers, Grok mapping, honest limits |
