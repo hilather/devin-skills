@@ -1,0 +1,6 @@
+{
+  "hook_event_name": "Stop",
+  "session_id": "test-session-1",
+  "prompt_id": "prompt-1",
+  "stop_hook_active": false
+}

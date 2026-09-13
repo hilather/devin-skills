@@ -1,0 +1,27 @@
+# Gate secret and session state must never be committed
+secret
+state.json
+state.json.tmp
+audit.jsonl
+install-hash
+source_realpath
+sessions/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+env/
+
+# Local / editor
+.DS_Store
+*.swp
+*~
+.idea/
+.vscode/

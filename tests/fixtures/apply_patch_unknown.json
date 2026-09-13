@@ -1,0 +1,10 @@
+{
+  "hook_event_name": "PreToolUse",
+  "tool_name": "apply_patch",
+  "session_id": "test-session-1",
+  "prompt_id": "prompt-1",
+  "tool_input": {
+    "unknown_schema": true,
+    "body": "*** Begin Patch\n*** Update File: src/main.py\n@@\n-a\n+b\n"
+  }
+}

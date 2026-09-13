@@ -1,0 +1,13 @@
+{
+  "hook_event_name": "PreToolUse",
+  "tool_name": "run_subagent",
+  "session_id": "test-session-1",
+  "prompt_id": "prompt-1",
+  "tool_input": {
+    "title": "implement",
+    "task": "edit the repo",
+    "profile": "subagent_general",
+    "is_background": false,
+    "resume": null
+  }
+}
