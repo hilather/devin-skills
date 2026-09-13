@@ -266,6 +266,8 @@ Live Devin checklist (throwaway repo): **[docs/smoke-test.md](docs/smoke-test.md
 
 ```
 hooks/devin-gates.py     # the lock
+hooks/devin_gates_goal.py # /goal state + CLI, spliced into the gate
+hooks/apply_goal_patch.py # the install-time splice
 hooks/hook-entries.json  # what install.sh merges into config.json
 install.sh / uninstall.sh
 skills/                  # /design /goal /skeptic-plan /skeptic-review /gate-bypass /gate-status

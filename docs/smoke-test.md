@@ -79,7 +79,7 @@ Implement the tiny change.
 - [ ] `goal-update --claim-done` → records a claim; `goal-status` still `active`. Nothing mints.
 - [ ] Fresh `goal-verifier` spawn whose task contains the `goal_id` → `GATES_VERDICT: PASS` → `goal-status` shows `complete`; Stop allowed. **Dump** the live `PostToolUse` payload for `profile=goal-verifier` — the same auto-mint spike as §3 applies (if `tool_response.output` is a stub, the mint may need `read_subagent`).
 - [ ] After completion, edit a workspace file → `goal-status` back to `active` (audit `goal_reopened`); Stop **re-blocked** in the same session (attach survived completion).
-- [ ] `run_subagent` with `profile=goal-verifier` while unattached or paused → **blocked**, even after markers exist.
+- [ ] `run_subagent` with `profile=goal-verifier` while unattached or paused → **blocked**, even after markers exist (unless `DEVIN_GATES_OFF` or a session `/gate-bypass` is set).
 - [ ] Three FAIL verdicts → `goal-update --blocked --reason "…"` → Stop allowed; `goal-status` shows `blocked` + reason.
 - [ ] `goal-clear --reason "…"` → `goal-status` prints `goal: none`; a late verifier verdict is ignored (audit `goal_verifier_late_result`).
 - [ ] **Reminder observability (unverified):** record whether hook stdout on `SessionStart` / `UserPromptSubmit` / `PostCompaction` actually reaches the agent. If it does not, the goal still survives on disk — `/goal status` recovers it; degraded, not broken.

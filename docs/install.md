@@ -38,12 +38,12 @@ In plain English:
 
 1. Creates `~/.config/devin/{skills,agents,hooks}` and a private state directory (mode `0700`).
 2. Generates a random HMAC secret once (`os.urandom` 32 bytes, mode `0600`). Reinstall does not rotate it.
-3. **Copies** `hooks/devin-gates.py` into `~/.config/devin/hooks/`. A symlink back to this repo would let a later edit of the lock file bypass itself.
+3. **Splices** the goal feature into the repo copy of `devin-gates.py` by running `hooks/apply_goal_patch.py` when present (idempotent; the repo copy stays canonical), then **copies** `hooks/devin-gates.py` — and `hooks/devin_gates_goal.py` when present — into `~/.config/devin/hooks/`. A symlink back to this repo would let a later edit of the lock file bypass itself.
 4. Records an install hash and the real path it copied from.
 5. **Symlinks** each skill and agent into `~/.config/devin/` so slash commands are `/design`, not `/devin-skills:design`. Refuses to clobber a real file unless you pass `--force`.
 6. Backs up `config.json` to `config.json.bak-devin-skills-<timestamp>`, then merges [hooks/hook-entries.json](../hooks/hook-entries.json):
    - Unknown top-level keys (`agent`, `devin`, `shell`, `theme_mode`, `version`, …) stay.
-   - One gate dispatcher per event. Missing events (`PostCompaction`, `SessionEnd`) are created.
+   - One gate dispatcher per event. Missing events are created — all seven on a fresh config; with herdr present, `PostCompaction` and `SessionEnd` (herdr already hooks the other five).
    - herdr entries stay first; herdr command strings are not rewritten.
    - `PermissionRequest` is left to herdr. The gate is not added there.
    - The installed command path is the **copied** gate, not the repo path.

@@ -11,7 +11,7 @@ Skills tell Devin *what* to do. The gate hook is the only layer that can *stop* 
 | Layer | Role | Can block writes? |
 | --- | --- | --- |
 | Devin builtin `/plan` | Host read-only draft, approval UI, `exit_plan_mode`. Not our code. | No |
-| User/project hooks (`devin-gates.py`) | HMAC markers, write-lock, Stop-lock, audited bypass. | **Yes** |
+| User/project hooks (`devin-gates.py`) | HMAC markers, write-lock, Stop-lock, audited bypass, signed goal state. | **Yes** |
 | Custom subagents | Read-only personas (`design-writer`, `design-reviewer`, `plan-skeptic`, `finding-skeptic`, `code-skeptic`, `goal-verifier`), `model: swe-2-high`. | No |
 | Skills | Orchestrators and slash commands. Prompts only. | No |
 | Tiny `AGENTS.md` | Pointers, not playbooks. | No |
@@ -70,7 +70,7 @@ What ships instead is the gate-backed approximation: the durable parts of the ha
 
 - **`/goal <objective>`** registers a workspace-scoped objective in an HMAC-signed goal file and attaches the session.
 - **`goal-update`** is the audited progress-reporting analog (`--message`, `--claim-done`, `--blocked --reason`).
-- **`goal-pause` / `goal-resume` / `goal-clear`** transition status; reasons are required and audited, like `/gate-bypass`.
+- **`goal-pause` / `goal-clear` (and `goal-update --blocked`)** transition status; `--reason` is required and audited, like `/gate-bypass`. **`goal-resume`** attaches the calling session — no reason — and reactivates a `paused`/`blocked` goal (attach-only on `active`, refused on `complete`/`cleared`).
 - **Completion is a gate state transition, not a self-report.** Only a fresh `goal-verifier` subagent emitting `GATES_VERDICT: PASS` moves `status=complete` — the verifier judges a parent-maintained `checklist.md` plus an evidence bundle, per item (`VERIFIED` / `REFUTED` / `UNVERIFIABLE — needs <evidence>`).
 - **A workspace mutation counter (`mutation_seq`) binds the witness to the tree it verified.** Any later source mutation — in any session — reopens the goal to `active`, and Stop re-blocks because the attach survives completion.
 
@@ -80,6 +80,8 @@ What Devin CLI 3000.10.21 still does not give us, and what `/goal` honestly does
 - **A token budget.** `verifier_sweeps` and update counts are the only "rounds" metric.
 - **Mid-turn pause.** `goal-pause` takes effect at the next hook boundary.
 - **An un-escapable guarantee.** The parent can `goal-pause`/`goal-clear`/`--blocked` itself — mitigated by mandatory `--reason` and the audit trail, identical to `/gate-bypass`. The 3-per-`prompt_id` Stop-loop guard can also end a turn unverified (**High** residual, unchanged).
+
+The goal code itself ships as `hooks/devin_gates_goal.py`, a separate module. `hooks/apply_goal_patch.py` splices a small wrapper block into `devin-gates.py` at install time — the gate source is a protected path inside sessions, so the feature cannot live in a file the agent edits. If `devin_gates_goal.py` is missing or fails to import, the splice fails silently and the gate runs with **no goal enforcement** — the rest of the lock is unaffected.
 
 ## Honest limits
 
@@ -104,7 +106,7 @@ flowchart LR
   P -->|paste files into task| RV
 ```
 
-Writer and reviewer have no `write` / `edit` / `exec`. That is why the parent copies fences. Child `write` is not assumed to re-enter hooks. Full loop: [usage.md](usage.md#design-docs).
+Writer and reviewer have no `write` / `edit` / `exec`. That is why the parent copies fences. Child `write` is not assumed to re-enter hooks. Full loop: [usage.md](usage.md#how-to-use-design).
 
 ### The PR Plan is not an executor
 

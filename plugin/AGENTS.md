@@ -2,6 +2,8 @@
 
 This machine uses ~/git/devin-skills/ (installed into ~/.config/devin/).
 
+_Plugin install: these pointers describe the user-level lock from `install.sh`. A plugin-only install ships the skills without the gate — writes and Stop are not actually hook-blocked._
+
 - After /plan is approved, do not implement until /skeptic-plan. Writes are hook-blocked until a plan-skeptic marker exists.
 - Before claiming done, run /skeptic-review. Stop is hook-blocked until a code-skeptic marker exists.
 - Design docs: /design (writer/reviewer loop). Mandatory PR Plan and Key Decisions.

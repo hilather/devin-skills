@@ -9,7 +9,7 @@ You need Devin CLI and a completed `sh install.sh`. Confirm with `/hooks` — `d
 A new session cannot edit the workspace. That is on purpose.
 
 - **Writes** (edit, write, apply_patch, most mutating exec, GitHub MCP that changes things) stay blocked until a **plan-skeptic** PASS exists.
-- **Stop** ("I'm done") stays blocked until a **code-skeptic** PASS exists, unless nothing actually changed, you set a bypass, or the Stop-loop guard fires.
+- **Stop** ("I'm done") stays blocked until a **code-skeptic** PASS exists, unless nothing actually changed, you set a bypass, or the Stop-loop guard fires. An attached `active` [goal](#long-objectives-optional) blocks Stop regardless — even with zero mutations or in plan mode.
 
 Approving `/plan` is not a skeptic PASS. You still need `/skeptic-plan` before implementation.
 
@@ -256,7 +256,7 @@ Small change, one PR in the plan? One `/plan` through the whole spec is fine. Mu
 
 Do **not** name a skill `plan`. Do **not** ask `/design` to start implementing. Do **not** `/gate-bypass` just to skip from spec to code unless the work is actually tiny.
 
-### 6. Long objectives (optional)
+## Long objectives (optional)
 
 For work with a verifiable completion condition that should outlive a single turn:
 
@@ -278,12 +278,12 @@ The gate registers a signed workspace goal and attaches your session. While it i
 | --- | --- |
 | `/plan …` | Built-in read-only draft. Approve in Devin's UI. |
 | `/design …` | Spec: writer/reviewer loop. See [How to use /design](#how-to-use-design). |
-| `/goal …` | Gate-tracked objective. Stop blocks until a fresh `goal-verifier` PASSes. `status`/`pause`/`resume`/`clear` subcommands. |
+| `/goal …` | Gate-tracked objective. Stop blocks until a fresh `goal-verifier` PASSes. `status`/`pause`/`resume`/`clear` subcommands. See [Long objectives](#long-objectives-optional). |
 | `/skeptic-plan` | Attacks the plan. Lifts the write-lock on PASS. |
 | `/skeptic-review` | Attacks the frozen diff. Lifts the Stop-lock on PASS. |
 | `/skeptic-review main...HEAD` | Same, but use this git range. |
 | `/gate-bypass <reason>` | Unlock this session. Reason required. Audited. |
-| `/gate-status` | Print markers, sweeps, override, `source_seq`. |
+| `/gate-status` | Print markers, sweeps, override, `source_seq`, attached goal. |
 
 ## Small tasks
 
@@ -310,6 +310,8 @@ That env var must be in the **shell that starts Devin**. Devin setting `DEVIN_GA
 ## What stays allowed while locked
 
 The lock is not "no tools." Read, grep, and similar stay available. Plan files under `~/.devin/plans/` can be edited so `/skeptic-plan` can revise. Design artifacts can be written under the design root `/design` created. Git status/diff still work.
+
+`/goal` management also stays available while locked: the goal CLI subcommands (`set-goal`, `goal-update`, `goal-pause`, `goal-resume`, `goal-clear`, `goal-status`) are allowlisted on `exec`, and the attached session can write under the goal's `goal_allow_root` (checklist, evidence) — those paths live outside the workspace, so they never reopen the goal.
 
 What is blocked: workspace source writes, general-purpose subagents, and mutating MCP (create issue, push, …) until the plan marker exists.
 
