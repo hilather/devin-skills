@@ -68,6 +68,8 @@ GIT_GLOBAL_FLAGS = (
     "--no-advice",
     "--no-lazy-fetch",
 )
+GIT_LOCKED_DENY = ("-c", "--exec-path", "--config-env")
+PYTHON_TAKES_ARG = ("-W", "-X", "-m", "-Q", "--check-hash-based-pycs")
 PATH_DELIM_CHARS = frozenset({os.sep, '"', "'", "\n", "\r", " ", "\t", ":"})
 MCP_LIST = ("mcp_list_servers", "mcp_list_tools")
 REMINDER_EVENTS = ("SessionStart", "UserPromptSubmit", "PostCompaction")
@@ -631,13 +633,31 @@ def command_has_metachar(command):
 
 
 def _python_uses_dash_c(rest):
-    for tok in rest:
-        if tok == "-c":
+    i = 0
+    n = len(rest)
+    while i < n:
+        tok = str(rest[i])
+        if tok == "-c" or (tok.startswith("-c") and not tok.startswith("--")):
             return True
         if tok == "--":
             return False
-        if not str(tok).startswith("-"):
+        if tok == "-m" or (tok.startswith("-m") and not tok.startswith("--")):
             return False
+        if tok in PYTHON_TAKES_ARG:
+            i += 2
+            continue
+        if tok.startswith("-W") and tok != "-W":
+            i += 1
+            continue
+        if tok.startswith("-X") and tok != "-X":
+            i += 1
+            continue
+        if tok.startswith("--check-hash-based-pycs="):
+            i += 1
+            continue
+        if not tok.startswith("-"):
+            return False
+        i += 1
     return False
 
 
@@ -678,6 +698,15 @@ def git_subcommand(argv):
     return argv[i], i
 
 
+def git_has_locked_config_injection(argv):
+    for tok in argv[1:]:
+        if tok in GIT_LOCKED_DENY:
+            return True
+        if tok.startswith("--exec-path=") or tok.startswith("--config-env="):
+            return True
+    return False
+
+
 def token_hits_protected(token, protected, cwd=None):
     text = str(token or "")
     if not text:
@@ -716,6 +745,8 @@ def locked_exec_allowed(argv):
         return False
     b0 = argv0_basename(argv[0])
     if b0 == "git":
+        if git_has_locked_config_injection(argv):
+            return False
         sub, idx = git_subcommand(argv)
         if sub not in LOCKED_GIT:
             return False

@@ -233,11 +233,26 @@ class GateTest(unittest.TestCase):
         proc = self.run_hook(pre("exec", {"command": "env devin -p hi"}))
         self.assert_block(proc, 0)
 
+    def test_t06c_python_option_arg_then_c_blocked_after_unlock(self):
+        self.seed(markers=[self.plan_marker()])
+        proc = self.run_hook(pre("exec", {"command": "python3 -W ignore -c 'print(1)'"}))
+        self.assert_block(proc, 0)
+        proc = self.run_hook(pre("exec", {"command": "python3 -X utf8 -c 'print(1)'"}))
+        self.assert_block(proc, 0)
+        proc = self.run_hook(pre("exec", {"command": "python3 --check-hash-based-pycs default -c 'print(1)'"}))
+        self.assert_block(proc, 0)
+
     def test_t07_exec_git_status_locked(self):
         proc = self.run_hook(load_fixture("exec_git_status.json"))
         self.assert_allow(proc)
         proc = self.run_hook(pre("exec", {"command": "git --no-pager status"}))
         self.assert_allow(proc)
+        proc = self.run_hook(pre("exec", {"command": "git -c alias.status='!touch x' status"}))
+        self.assert_block(proc, 0)
+        proc = self.run_hook(pre("exec", {"command": "git --exec-path=/tmp status"}))
+        self.assert_block(proc, 0)
+        proc = self.run_hook(pre("exec", {"command": "git --config-env=GIT_DIR=FOO status"}))
+        self.assert_block(proc, 0)
 
     def test_t08_exec_git_commit_locked(self):
         proc = self.run_hook(load_fixture("exec_git_commit.json"))
