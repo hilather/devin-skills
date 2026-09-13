@@ -15,6 +15,8 @@ Approving `/plan` is not a skeptic PASS. You still need `/skeptic-plan` before i
 
 ## Everyday workflow
 
+Optional, before step 1, if the change needs a spec: **[/design](#how-to-use-design)**. Then take the first PR slice into `/plan`.
+
 ### 1. Plan
 
 ```
@@ -67,17 +69,109 @@ On PASS, the gate mints a code-skeptic marker and Stop is allowed.
 
 If you edit source **after** a PASS, the code marker is cleared. You need another `/skeptic-review`. A stale PASS cannot be reused.
 
-## Design docs
+## How to use /design
 
-Before a big `/plan`, when the change needs a spec:
+Use this when you'd write a spec by hand: a system design, a migration, a feature that needs Key Decisions. Do **not** use it for a typo, a one-file bugfix, or "just implement it." Those go to `/plan` or `/gate-bypass`.
+
+`/design` writes a document. It does not edit your repo. It does not lift the write-lock.
+
+### 1. Invoke it
+
+In Devin:
 
 ```
-/design replace the sync job with a queue worker
+/design <what to design>
 ```
 
-This is a writer/reviewer loop, not an unlock. Workspace source stays locked. Artifacts go under a gate-issued design root (usually `~/.cache/devin-skills/design/<id>/`). The parent is the only writer — `design-writer` and `design-reviewer` are read-only personas. The parent copies their fenced markdown onto disk.
+The argument **is** the task. Include:
 
-The doc must include **Key Decisions** and a **PR Plan**. Missing either is at least a major finding.
+- What you want (feature, architecture, migration)
+- Constraints ("no new infra", "keep the public API", "must ship behind a flag")
+- Paths and systems that matter (`src/jobs/sync.ts`, the Job row, …)
+- Links or prior conversation that the writer should not have to guess
+
+Examples:
+
+```
+/design replace the sync job with a queue worker. Keep the existing Job row shape. No new message bus — use the DB as the queue.
+```
+
+```
+/design add retry/backoff around src/github/client.ts. Same exported functions. Cap at 3 attempts. Document the idempotency assumption.
+```
+
+```
+/design split billing into a separate package. Do not change the HTTP API in this design — PR Plan should land that later.
+```
+
+Bad: `/design make it better`. The writer will invent a problem.
+
+### 2. Sit through the loop (interrupt only when asked)
+
+You should see progress like:
+
+- `Design document drafted. Starting review...`
+- `Reviewer found N issues (X critical, Y major, Z minor/nit). Resuming writer to revise...`
+- `Revisions applied. Running re-review...`
+- `Re-review (round 2)...`
+- `Review passed with 0 issues. Finalizing...`
+
+You do **not** need to type `/design` again each round. The parent keeps going.
+
+**When Devin asks you a question**, answer it. That happens when:
+
+- the reviewer marked something `needs-user-input` (product call, not a tech nit), or
+- writer and reviewer are stuck (`wontfix` re-opened twice)
+
+Your answer is **final**. The writer incorporates it as `Status: addressed` and does not re-litigate it.
+
+### 3. Take the artifacts
+
+Files land under a gate-issued design root, usually:
+
+```
+~/.cache/devin-skills/design/<id>/
+  design-doc.md    # the spec
+  summary.md       # short writer's summary
+  review.md        # review notes
+  state.json       # round count, agent ids — ignore unless debugging
+```
+
+`<id>` is an 8-char hex id printed at the start (`design_id=...`). The parent also prints the full `design-doc.md` path in the final report.
+
+The spec is required to contain:
+
+- `## Key Decisions` — numbered architectural calls with rationale
+- `## PR Plan` — last major section, `### PR N:` slices that are independently mergeable
+
+Missing either is at least a major review finding. The loop should not finish without them.
+
+### 4. Read the final report
+
+When the loop exits you get:
+
+1. Design document path
+2. Key Decisions (extracted)
+3. How many review rounds
+4. Issues addressed, by severity
+5. The PR Plan
+6. Open questions, if any remain — those are asked, not silently filled in
+
+Keep `design-doc.md`. That file is the input to `/plan`. Do not start implementing from this skill.
+
+### 5. What this skill will not do
+
+| Don't expect | Do this instead |
+| --- | --- |
+| Unlock workspace writes | `/skeptic-plan` after `/plan` |
+| Edit `src/` | `/plan` a PR slice, then implement |
+| Walk PR 1…N by itself | You run `/plan` per slice. There is no `/goal`. |
+| Survive a vague one-liner | Put constraints in the `/design` argument |
+| Run inside a subagent | Invoke it on the parent (depth 0) only |
+
+Re-running `/design` on the same problem starts a **new** design id (new folder). It does not resume the last spec unless you paste that spec into the new prompt.
+
+This is a writer/reviewer loop, not an unlock. Workspace source stays locked. Artifacts go under the design root. The parent is the only writer — `design-writer` and `design-reviewer` are read-only. The parent copies their fenced markdown onto disk.
 
 ```mermaid
 flowchart TD
@@ -107,8 +201,6 @@ Rules that matter in practice:
 - **Resume** the same writer/reviewer on revise and re-review. If resume fails, spawn fresh and paste the files — disk is the memory.
 - **Escalate, don't spin.** A `wontfix` re-opened twice, or `needs-user-input`, goes to you. Your answer is final (`Status: addressed`).
 - **`/design` does not lift the write-lock.** You still `/plan` → `/skeptic-plan` before implementing.
-
-After it finishes, the parent reports the design-doc path, Key Decisions, review-round count, issues addressed by severity, and the PR Plan.
 
 ## From design to implementation
 
@@ -169,7 +261,7 @@ Do **not** name a skill `plan`. Do **not** ask `/design` to start implementing. 
 | You type | What happens |
 | --- | --- |
 | `/plan …` | Built-in read-only draft. Approve in Devin's UI. |
-| `/design …` | Writer/reviewer loop. Artifacts under the design root. |
+| `/design …` | Spec: writer/reviewer loop. See [How to use /design](#how-to-use-design). |
 | `/skeptic-plan` | Attacks the plan. Lifts the write-lock on PASS. |
 | `/skeptic-review` | Attacks the frozen diff. Lifts the Stop-lock on PASS. |
 | `/skeptic-review main...HEAD` | Same, but use this git range. |
@@ -205,6 +297,9 @@ The lock is not "no tools." Read, grep, and similar stay available. Plan files u
 What is blocked: workspace source writes, general-purpose subagents, and mutating MCP (create issue, push, …) until the plan marker exists.
 
 ## FAQ
+
+**When do I `/design` vs `/plan`?**
+`/design` is a spec (architecture, Key Decisions, PR Plan). `/plan` is the implementation plan for a slice of work. Spec first when you'd write a design doc by hand; skip `/design` for small, obvious changes.
 
 **Does `/design` implement the PR Plan?**
 No. It writes and presents the plan. You (or a later turn) run `/plan` on a slice, then `/skeptic-plan`. See [From design to implementation](#from-design-to-implementation).
