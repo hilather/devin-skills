@@ -110,6 +110,60 @@ Rules that matter in practice:
 
 After it finishes, the parent reports the design-doc path, Key Decisions, review-round count, issues addressed by severity, and the PR Plan.
 
+## From design to implementation
+
+`/design` covers the **execution plan as a document**. It does not cover **running** that plan.
+
+The writer is required to end the spec with `## PR Plan`, shaped so a later execute path can parse it:
+
+```
+## PR Plan
+
+### PR 1: <title>
+- **Files/components affected:** <paths>
+- **Dependencies:** None
+- **Description:** <brief description>
+
+### PR 2: <title>
+- **Files/components affected:** <paths>
+- **Dependencies:** PR 1
+- **Description:** <brief description>
+```
+
+Each PR must be independently reviewable and mergeable. Missing `## PR Plan` is at least a major review finding. Step 6 of `/design` extracts that section and presents it to you. Then the skill **stops**. Workspace source is still locked.
+
+There is no Devin skill that walks `PR 1 … PR N` on its own. That would be Grok `/goal` (host rounds, pause/resume, an evidence review that can refuse completion). This repo does not ship `/goal`. The honest execute path is Devin's built-in `/plan`, one slice at a time:
+
+```
+/plan implement PR 1 from the design doc at ~/.cache/devin-skills/design/<id>/design-doc.md
+```
+
+Paste or point at the spec so `/plan` does not invent a different design. Approve. Then the usual lock:
+
+1. `/skeptic-plan` — skeptic the implementation plan for **this** slice
+2. Implement
+3. `/skeptic-review`
+4. Next PR
+
+```mermaid
+flowchart TD
+  A["/design finished — PR Plan on disk"] --> B[Pick the next unmerged PR]
+  B --> C["/plan that slice — feed the design doc"]
+  C --> D[You approve]
+  D --> E["/skeptic-plan"]
+  E -->|PASS| F[Implement that PR]
+  E -->|3 FAILs| X[BLOCKED — do not implement]
+  F --> G["/skeptic-review"]
+  G -->|PASS| H{More PRs?}
+  G -->|3 FAILs| Y[BLOCKED — do not LGTM]
+  H -->|yes| B
+  H -->|no| I[Done]
+```
+
+Small change, one PR in the plan? One `/plan` through the whole spec is fine. Multi-PR design? Do not squash them into one implementation plan unless you explicitly want that — the skeptic will (correctly) complain if the slice is not independently mergeable.
+
+Do **not** name a skill `plan`. Do **not** ask `/design` to start implementing. Do **not** `/gate-bypass` just to skip from spec to code unless the work is actually tiny.
+
 ## Commands at a glance
 
 | You type | What happens |
@@ -151,6 +205,9 @@ The lock is not "no tools." Read, grep, and similar stay available. Plan files u
 What is blocked: workspace source writes, general-purpose subagents, and mutating MCP (create issue, push, …) until the plan marker exists.
 
 ## FAQ
+
+**Does `/design` implement the PR Plan?**
+No. It writes and presents the plan. You (or a later turn) run `/plan` on a slice, then `/skeptic-plan`. See [From design to implementation](#from-design-to-implementation).
 
 **Devin still cannot write after I approved `/plan`.**
 That is correct. Approval is not a skeptic. Run `/skeptic-plan`.

@@ -98,3 +98,17 @@ flowchart LR
 ```
 
 Writer and reviewer have no `write` / `edit` / `exec`. That is why the parent copies fences. Child `write` is not assumed to re-enter hooks. Full loop: [usage.md](usage.md#design-docs).
+
+### The PR Plan is not an executor
+
+`design-writer` must emit `## PR Plan` with `### PR N:` slices (files, dependencies, description) "so a later execute path can parse it." `/design` Step 6 **presents** that plan. Nothing in this repo **runs** it.
+
+The execute path is:
+
+- Devin builtin `/plan` (one slice, or the whole spec if it is small)
+- `/skeptic-plan` + write-lock
+- implement
+- `/skeptic-review` + Stop-lock
+- next PR
+
+A skill that loops those PRs until the spec is fully landed would be a `/goal` harness. v1 does not ship that. See [From design to implementation](usage.md#from-design-to-implementation).
