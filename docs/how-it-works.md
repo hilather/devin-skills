@@ -86,3 +86,15 @@ That is "don't implement until the plan survives; don't claim done until the dif
 ## Design-time writes
 
 `/design` needs somewhere to put artifacts while the workspace is still locked. The gate's `allow-design` subcommand issues a `design_allow_root` (usually under `~/.cache/devin-skills/design/<id>/`). Parent writes succeed there. Workspace source stays locked. Do not symlink out of that root.
+
+The loop itself:
+
+```mermaid
+flowchart LR
+  W[design-writer] -->|fenced markdown| P[Parent copies to disk]
+  RV[design-reviewer] -->|fenced review| P
+  P -->|paste files into task| W
+  P -->|paste files into task| RV
+```
+
+Writer and reviewer have no `write` / `edit` / `exec`. That is why the parent copies fences. Child `write` is not assumed to re-enter hooks. Full loop: [usage.md](usage.md#design-docs).

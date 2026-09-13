@@ -58,6 +58,8 @@ If you only install the plugin, you get nicer prompts and Devin can still edit a
 ```mermaid
 flowchart TD
   A[New Devin session] --> B[Writes are locked]
+  B -.-> Opt["/design — optional spec"]
+  Opt --> C
   B --> C["/plan — draft the work"]
   C --> D[You approve the plan]
   D --> E["Still locked"]
@@ -74,6 +76,32 @@ flowchart TD
 ```
 
 Default is **locked**, even if you never ran `/plan`. Tiny tasks skip the ceremony with `/gate-bypass <reason>` — a reason is required, and it is audited.
+
+`/design` does not unlock the workspace. It only writes a spec under a gate-issued design root. You still `/plan` → `/skeptic-plan` before implementing.
+
+### How `/design` goes
+
+A read-only `design-writer` drafts. A read-only `design-reviewer` attacks. The parent is the only process that writes files. They loop until zero open issues. No round cap. Nits count.
+
+```mermaid
+flowchart TD
+  A["/design — what to spec"] --> B[Gate issues a design root]
+  B --> C[Writer drafts the doc]
+  C --> D[Parent copies it onto the design root]
+  D --> E[Reviewer attacks the doc]
+  E --> F{Open issues?}
+  F -->|0 open| G[Present Key Decisions and PR Plan]
+  F -->|needs your call or stalemate| H[Ask you]
+  H --> I[Writer revises]
+  F -->|open issues| I
+  I --> J[Parent copies the revision]
+  J --> K[Reviewer re-reviews]
+  K --> F
+  G --> L[Workspace still locked]
+  L --> M["Then /plan as usual"]
+```
+
+The doc must include **Key Decisions** and a **PR Plan**. Details: **[docs/usage.md](docs/usage.md#design-docs)**.
 
 ## Install
 
