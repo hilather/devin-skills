@@ -443,9 +443,10 @@ class InstallMergeTest(unittest.TestCase):
         self.assertNotIn(BEGIN, restored)
 
     def test_skip_missing_skills_and_agents(self):
-        self.assertFalse(os.path.isdir(os.path.join(ROOT, "skills")))
-        self.assertFalse(os.path.isdir(os.path.join(ROOT, "agents")))
-        proc = self.install()
+        src = self.make_src(with_skills=False)
+        self.assertFalse(os.path.isdir(os.path.join(src, "skills")))
+        self.assertFalse(os.path.isdir(os.path.join(src, "agents")))
+        proc = self.install(src=src)
         self.assertEqual(proc.returncode, 0)
         self.assertTrue(os.path.isdir(os.path.join(self.prefix, "skills")))
         self.assertTrue(os.path.isdir(os.path.join(self.prefix, "agents")))
