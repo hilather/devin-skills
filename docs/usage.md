@@ -67,17 +67,48 @@ On PASS, the gate mints a code-skeptic marker and Stop is allowed.
 
 If you edit source **after** a PASS, the code marker is cleared. You need another `/skeptic-review`. A stale PASS cannot be reused.
 
-### 5. Design docs (optional)
+## Design docs
 
-Before a big `/plan`:
+Before a big `/plan`, when the change needs a spec:
 
 ```
 /design replace the sync job with a queue worker
 ```
 
-A `design-writer` drafts, a `design-reviewer` attacks, they loop until zero open issues. The parent is the only process that writes files, and only under a gate-issued design root. The doc must include **Key Decisions** and a **PR Plan**.
+This is a writer/reviewer loop, not an unlock. Workspace source stays locked. Artifacts go under a gate-issued design root (usually `~/.cache/devin-skills/design/<id>/`). The parent is the only writer — `design-writer` and `design-reviewer` are read-only personas. The parent copies their fenced markdown onto disk.
 
-`/design` does not unlock the workspace. You still `/plan` → `/skeptic-plan` before implementing.
+The doc must include **Key Decisions** and a **PR Plan**. Missing either is at least a major finding.
+
+```mermaid
+flowchart TD
+  A["/design — what to spec"] --> S[allow-design]
+  S --> R[Gate prints design_id and design_allow_root]
+  R --> Q[Parent scopes that root]
+  Q --> W1[Writer drafts — fresh design-writer]
+  W1 --> C1[Parent copies design-doc and summary]
+  C1 --> RV1[Reviewer attacks — fresh design-reviewer]
+  RV1 --> C2[Parent copies review notes]
+  C2 --> X{Count Status: open}
+  X -->|0 open and 0 needs-user-input| F[Extract Key Decisions, Open Questions, PR Plan]
+  X -->|needs-user-input or stalemate| U[Ask you — your call is final]
+  U --> W2
+  X -->|any open| W2[Writer revises — resume]
+  W2 --> C3[Parent copies updated doc and notes]
+  C3 --> RV2[Reviewer re-reviews — resume]
+  RV2 --> C4[Parent copies review notes]
+  C4 --> X
+  F --> L[Workspace still locked]
+  L --> P["Then /plan → /skeptic-plan"]
+```
+
+Rules that matter in practice:
+
+- **Loop until zero open.** No max-rounds cap. Nits count.
+- **Resume** the same writer/reviewer on revise and re-review. If resume fails, spawn fresh and paste the files — disk is the memory.
+- **Escalate, don't spin.** A `wontfix` re-opened twice, or `needs-user-input`, goes to you. Your answer is final (`Status: addressed`).
+- **`/design` does not lift the write-lock.** You still `/plan` → `/skeptic-plan` before implementing.
+
+After it finishes, the parent reports the design-doc path, Key Decisions, review-round count, issues addressed by severity, and the PR Plan.
 
 ## Commands at a glance
 
