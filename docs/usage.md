@@ -9,13 +9,13 @@ You need Devin CLI and a completed `sh install.sh`. Confirm with `/hooks` — `d
 A new session cannot edit the workspace. That is on purpose.
 
 - **Writes** (edit, write, apply_patch, most mutating exec, GitHub MCP that changes things) stay blocked until a **plan-skeptic** PASS exists.
-- **Stop** ("I'm done") stays blocked until a **code-skeptic** PASS exists, unless nothing actually changed, you set a bypass, or the Stop-loop guard fires. An attached `active` [goal](#long-objectives-optional) blocks Stop regardless — even with zero mutations or in plan mode.
+- **Stop** ("I'm done") stays blocked until a **code-skeptic** PASS exists, unless nothing actually changed, you set a bypass, or the Stop-loop guard fires. An attached `active` [goal](#how-to-use-goal) blocks Stop regardless — even with zero mutations or in plan mode.
 
 Approving `/plan` is not a skeptic PASS. You still need `/skeptic-plan` before implementation.
 
 ## Everyday workflow
 
-Optional, before step 1, if the change needs a spec: **[/design](#how-to-use-design)**. Then take the first PR slice into `/plan`.
+Optional, before step 1, if the change needs a spec: **[/design](#how-to-use-design)**. Then take the first PR slice into `/plan`. Optional wrap around the whole job if "done" is a checkable condition: **[/goal](#how-to-use-goal)**.
 
 ### 1. Plan
 
@@ -256,32 +256,146 @@ Small change, one PR in the plan? One `/plan` through the whole spec is fine. Mu
 
 Do **not** name a skill `plan`. Do **not** ask `/design` to start implementing. Do **not** `/gate-bypass` just to skip from spec to code unless the work is actually tiny.
 
-## Long objectives (optional)
+## How to use /goal
 
-For work with a verifiable completion condition that should outlive a single turn:
+Use this when the work has a **checkable done condition** that should outlive one turn. `/design` writes a spec. `/plan` plans a slice. `/goal` keeps Devin on **one** objective until an independent verifier agrees it is done.
+
+Good:
 
 ```
 /goal get the full test suite green
 ```
 
-The gate registers a signed workspace goal and attaches your session. While it is `active`, **Stop is blocked** — even with zero mutations or in plan mode. `goal-update --message` reports progress (audited); `goal-update --claim-done` records a claim. Only a fresh `goal-verifier` subagent PASS — judging a `checklist.md` plus your evidence bundle — moves the goal to `complete`. `set-goal --kind code-change|research|analysis|general` (default `general`) tells the verifier what evidence to emphasize; `goal-status` shows telemetry (`kind`, `claims`, `updates`, `age`, `tool_errors`) next to the enforcement counters.
+```
+/goal GET /health returns 200 from the running server
+```
 
-- `/goal pause --reason …` / `/goal resume` / `/goal clear --reason …` / `/goal status` manage the run. Resuming a `paused`/`blocked` goal needs `--reason` **and your next prompt** — the gate sets a user-prompt boundary on every stop, so the model cannot simply self-resume (the boundary clears on the `UserPromptSubmit` hook event; like every gate escape, a forged event is audited, not prevented); a fresh session adopts an `active` goal with plain `/goal resume` (attach-only, no reason needed).
-- **Claim before verify — enforced.** A verifier spawn is refused until `goal-update --claim-done` binds the claim to the current tree; any workspace edit after the claim stales it — re-claim after every fix cycle. Working without ever claiming is counted (`unclaimed_rounds`): nudges past 8 rounds, auto-block at 40 (`DEVIN_GOAL_UNCLAIMED_CAP`, `0` disables).
-- **Snapshot the checklist.** `goal-baseline` copies `checklist.md` into the signed goal file (once-only; the first claim captures it implicitly). Later checklist edits are legal but gate-stamped as `checklist_drifted` — the verifier judges whether the change weakens the bar.
-- The **gate decides when to stop looping**, from counters in the signed goal file — you cannot reset them. Six auto-block paths set `status=blocked` with a prefixed `blocked_reason` (all shown by `goal-status`):
-  - `no-progress:` — the same gap fingerprint recurred on 2 consecutive FAIL sweeps (5 after a strategist grant).
-  - `sweep-cap:` — `verifier_sweeps` hit the cap (default 6, `DEVIN_GOAL_SWEEP_CAP` env, +2 per strategist fire, max +4).
-  - `blocking:` — the verifier returned `GATES_VERDICT: BLOCKED` (every residual is `contradiction`/`unverifiable` — no model-fixable path).
-  - `external-repeat:` — the same `blocker_key` recurred across blocked reports.
-  - `unclaimed-work:` — unclaimed rounds hit `DEVIN_GOAL_UNCLAIMED_CAP` (default 40).
-  - `infra-errors:` — `DEVIN_GOAL_ERROR_STREAK` (default 3) consecutive failed `run_subagent`/`mcp_call_tool`/`mcp__*`/`write_to_process` calls — a real outage stops the loop.
-- **Self-blocking is a streak, not a switch.** `goal-update --blocked --reason …` is refused the first 2 attempts ("keep working"); the 3rd is honored (`DEVIN_GOAL_BLOCKED_STREAK`). Add `--blocker-key <snake_key>` for external dependencies so a repeat escalates.
-- A **strategist** fires after every 3 consecutive FAIL sweeps with *different* gap sets (whack-a-mole): cap +2, stall threshold 5, and claims are refused until a fresh `strategy.md` exists under `goal_allow_root` — spawn a `goal-strategist` subagent (spawnable only while pending) and write its restructured HOW down. The WHAT — objective and checklist — stays frozen.
-- After `complete`, a later workspace mutation **reopens** the goal (the witness is bound to the tree it verified) and re-blocks Stop.
-- Implementation goals still compose with `/skeptic-plan` and `/skeptic-review` — the verifier checks the *objective*; the skeptics check the *diff*.
-- Manual escapes stay audited: `goal-update --blocked --reason …` (3-attempt streak), `goal-pause`, `goal-clear` — and every stopped goal needs your next prompt before it can resume.
-- Honest gaps: no host round driver, no token budget, `goal-pause` lands at the next hook boundary, and you can always `goal-clear` yourself (audited).
+```
+/goal the billing migration is reversible on a copy of prod-shaped data
+```
+
+Bad: `/goal implement the whole PR Plan`. That is still `/plan` per slice. `/goal` tracks one objective, not a list of PRs. Also bad: `/goal make it better` — the verifier needs a concrete checklist.
+
+`/goal` does **not** lift the write-lock. Code changes still need `/skeptic-plan` before edits and `/skeptic-review` before a code-level "I'm done." A research/liveness goal with no source mutations needs no skeptic markers.
+
+### 1. Invoke it
+
+```
+/goal <objective>
+/goal status
+/goal pause --reason <why>
+/goal resume --reason <why>
+/goal clear --reason <why>
+```
+
+Anything that is not `status|pause|resume|clear` is a new objective. The workspace may only have **one** non-cleared goal. `complete` still occupies the slot until you `/goal clear`.
+
+Optional shape (biases the verifier, not enforcement):
+
+```
+/goal --kind code-change get the unit tests in src/billing/ green
+```
+
+Kinds: `code-change` | `research` | `analysis` | `general` (default).
+
+### 2. Sit through work → claim → verify
+
+You should see: a `goal_id=`, a design-like cache root, then work, then a claim, then a verifier.
+
+```mermaid
+flowchart TD
+  A["/goal objective"] --> B[Gate signs the goal — Stop blocked]
+  B --> C[checklist.md + baseline snapshot]
+  C --> D[Do the work]
+  D --> E["goal-update — progress note"]
+  E --> F{Checklist looks done?}
+  F -->|no| D
+  F -->|yes| G["--claim-done"]
+  G --> H[Fresh goal-verifier]
+  H -->|PASS| I[complete]
+  H -->|FAIL — model-fixable| J[Fix named gaps]
+  J --> G
+  H -->|3 FAILs, different gaps| S[goal-strategist — change HOW]
+  S --> T[strategy.md]
+  T --> D
+  H -->|BLOCKED or auto-block| K[Ask you]
+  K --> L["Your next prompt + /goal resume --reason"]
+  L --> D
+  I --> M{Later source edit?}
+  M -->|yes| N[Reopens — Stop blocks again]
+  N --> D
+```
+
+You do **not** type `/goal` again each round. The parent keeps going until PASS, auto-block, or you pause/clear.
+
+**When Devin asks you**, that is a real stop:
+
+- verifier `BLOCKED` (contradiction or unverifiable evidence — not model-fixable)
+- auto-block: spinning on the same gaps, sweep cap, unclaimed work, infra errors, repeated external blocker
+- Devin wants to `goal-pause` / `goal-clear` / `--blocked`
+
+Resume of a `paused`/`blocked` goal needs **your next message**, then `/goal resume --reason …`. The model cannot self-resume across that boundary.
+
+### 3. Take the artifacts
+
+Usually:
+
+```
+~/.cache/devin-skills/goal/<id>/
+  checklist.md    # per-item done contract
+  evidence/       # tests, diffs, transcripts — verifier is read-only
+  strategy.md     # only after a whack-a-mole fire
+  state.json      # parent scratch
+```
+
+`<id>` is 8 hex chars from `goal_id=`. Checklist items must be concrete ("`pytest tests/billing` exits 0", not "tests look good"). The verifier judges items, not vibes.
+
+### 4. What the gate owns (you cannot reset this)
+
+Devin cannot mark the goal complete. `--claim-done` is a **claim**, bound to the current tree. A later edit stales it; re-claim after every fix. Only a **fresh** `goal-verifier` (`resume` unset) emitting `GATES_VERDICT: PASS` mints `complete`.
+
+The gate also decides when to **stop looping**. Auto-blocks set `status=blocked` with a prefixed reason (`/goal status` shows them):
+
+| Prefix | Trigger | Meaning |
+| --- | --- | --- |
+| `no-progress:` | Same gaps on 2 consecutive FAIL sweeps (5 after a strategist grant) | Spinning |
+| `sweep-cap:` | Verifier sweeps hit the cap (default 6, +2 per strategist fire, max +4) | Bound exhausted |
+| `blocking:` | Verifier `BLOCKED` — every residual is contradiction/unverifiable | You have to decide |
+| `external-repeat:` | Same `blocker_key` again | Repeated external dependency |
+| `unclaimed-work:` | Working without claiming (default 40 rounds) | Claim, pause, or block |
+| `infra-errors:` | Consecutive failed `run_subagent` / MCP / `write_to_process` (default 3) | Real outage |
+
+**Whack-a-mole.** After 3 consecutive FAIL sweeps with *different* gap sets, a `goal-strategist` fires. Claims are refused until `strategy.md` exists. Objective and checklist stay frozen — change the HOW, not the WHAT.
+
+**Self-block is a streak.** `--blocked --reason` is refused twice ("keep working"); the third is honored. Add `--blocker-key snake_key` for an external cause so a repeat escalates.
+
+### 5. Pause / resume / clear
+
+| You type | What happens |
+| --- | --- |
+| `/goal status` | Attachment, sweeps, stall, blocked reason. Any session. |
+| `/goal pause --reason …` | Releases the Stop block at the next hook boundary. Goal stays on disk. |
+| `/goal resume` | New session adopting an already-`active` goal. No reason. |
+| `/goal resume --reason …` | From `paused`/`blocked`, after **your** next prompt. Resets stall counters. |
+| `/goal clear --reason …` | Tombstones the goal. Late verifier results are ignored. |
+
+`goal-pause` cannot interrupt a running tool call. It lands at the next hook.
+
+### 6. What this skill will not do
+
+| Don't expect | Do this instead |
+| --- | --- |
+| Unlock workspace writes | `/skeptic-plan` after `/plan` |
+| Walk PR 1…N | `/plan` each slice from the design doc |
+| Mark itself complete | Fresh `goal-verifier` PASS only |
+| Keep going while you are away | No host round driver. Stop-block only keeps an in-flight turn alive |
+| A token budget | Sweep cap is the bound |
+| Mid-turn pause | Pause lands at the next hook boundary |
+| Survive a vague one-liner | Put a checkable condition in the `/goal` argument |
+
+A later source mutation after `complete` **reopens** the goal and re-blocks Stop. That is on purpose: the witness was bound to the tree it verified.
+
+Honest gaps (no host rounds, no token budget, parent still pastes the evidence bundle): [how-it-works.md](how-it-works.md#what-we-did-not-copy).
 
 ## Commands at a glance
 
@@ -289,7 +403,7 @@ The gate registers a signed workspace goal and attaches your session. While it i
 | --- | --- |
 | `/plan …` | Built-in read-only draft. Approve in Devin's UI. |
 | `/design …` | Spec: writer/reviewer loop. See [How to use /design](#how-to-use-design). |
-| `/goal …` | Gate-tracked objective. Stop blocks until a fresh `goal-verifier` PASSes. `status`/`pause`/`resume`/`clear` subcommands. See [Long objectives](#long-objectives-optional). |
+| `/goal …` | Gate-tracked objective. Stop blocks until a fresh `goal-verifier` PASSes. `status`/`pause`/`resume`/`clear`. See [How to use /goal](#how-to-use-goal). |
 | `/skeptic-plan` | Attacks the plan. Lifts the write-lock on PASS. |
 | `/skeptic-review` | Attacks the frozen diff. Lifts the Stop-lock on PASS. |
 | `/skeptic-review main...HEAD` | Same, but use this git range. |
@@ -330,6 +444,12 @@ What is blocked: workspace source writes, general-purpose subagents, and mutatin
 
 **When do I `/design` vs `/plan`?**
 `/design` is a spec (architecture, Key Decisions, PR Plan). `/plan` is the implementation plan for a slice of work. Spec first when you'd write a design doc by hand; skip `/design` for small, obvious changes.
+
+**When do I `/goal` vs `/plan` vs `/design`?**
+`/design` is a spec. `/plan` is the implementation plan for a slice. `/goal` is a durable, checkable objective the gate will not let Devin walk away from until a verifier PASSes. Use `/goal` when "done" is a condition ("tests green"), not a file list.
+
+**Does `/goal` unlock writes or implement the PR Plan?**
+No and no. Writes still need `/skeptic-plan`. PR slices still need `/plan`. `/goal` only owns the *completion* claim.
 
 **Does `/design` implement the PR Plan?**
 No. It writes and presents the plan. You (or a later turn) run `/plan` on a slice, then `/skeptic-plan`. See [From design to implementation](#from-design-to-implementation).
