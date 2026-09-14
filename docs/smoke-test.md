@@ -73,13 +73,25 @@ Implement the tiny change.
 
 ## 10. `/goal`
 
-- [ ] `/goal <objective>` → `set-goal` prints `goal_id=`, `goal_allow_root=`, `status=active`. `goal-status` shows `attached: yes`.
+"Stop allowed" below means the **goal's** block lifts — the ordinary Stop rules still apply.
+
+- [ ] `/goal <objective>` → `set-goal` prints `goal_id=`, `goal_allow_root=`, `status=active`, `kind=` (default `general`; `--kind research` prints `kind=research`, an invalid kind is refused). `goal-status` shows `attached: yes` plus the telemetry line (`claims`, `updates`, `age`, `tool_errors`).
 - [ ] Stop / "I'm done" → **blocked** with the goal reason — even with `source_seq == 0` and in plan mode.
-- [ ] `goal-pause --reason "…"` → Stop **allowed** at the next boundary. `goal-resume` re-attaches and re-blocks.
-- [ ] `goal-update --claim-done` → records a claim; `goal-status` still `active`. Nothing mints.
-- [ ] Fresh `goal-verifier` spawn whose task contains the `goal_id` → `GATES_VERDICT: PASS` → `goal-status` shows `complete`; Stop allowed. **Dump** the live `PostToolUse` payload for `profile=goal-verifier` — the same auto-mint spike as §3 applies (if `tool_response.output` is a stub, the mint may need `read_subagent`).
-- [ ] After completion, edit a workspace file → `goal-status` back to `active` (audit `goal_reopened`); Stop **re-blocked** in the same session (attach survived completion).
+- [ ] `goal-pause --reason "…"` → Stop **allowed** at the next boundary. `goal-resume` is then **refused** — `needs_user_prompt` is set and the model cannot clear it. Send a real user prompt (`UserPromptSubmit` clears it; `goal-status` shows `resume_gate=open`), then `goal-resume --reason "…"` re-attaches and re-blocks. If the host never emits the event, `DEVIN_GOAL_PROMPT_GATE=0` is the documented escape — record which happened.
+- [ ] `goal-update --claim-done` → records a claim; `goal-status` still `ACTIVE`. Nothing mints.
+- [ ] **Claim before verify:** a fresh `goal-verifier` spawn with **no** claim → **blocked** (`no claim`); after `--claim-done` → allowed; a workspace edit after the claim → spawn blocked again (`stale claim`) until re-claim. Session `/gate-bypass` does **not** lift this; `DEVIN_GATES_OFF=1` does. A second fresh spawn while the first is still in flight → **blocked** (`already in flight`); a `resume`d spawn needs no claim and is never a witness. A stale binding (mutation since spawn) is voided at the next spawn and the orphaned result lands late; a still-current wedge recovers via `goal-pause` → prompt → `goal-resume`.
+- [ ] **Objective binding:** a `goal-verifier` spawn whose task does not contain the signed objective verbatim → **blocked**. A task that does → allowed.
+- [ ] **Checklist baseline:** write `checklist.md` under `goal_allow_root`, run `goal-baseline` → `goal-status` shows `baseline_sha256`; a second `goal-baseline` is refused. Edit `checklist.md`, then claim or spawn → `checklist_drifted` appears in `goal-status` (audit `goal_checklist_drift`).
+- [ ] Fresh `goal-verifier` spawn whose task contains the `goal_id` → `GATES_VERDICT: PASS` → `goal-status` shows `COMPLETE`; Stop allowed. **Dump** the live `PostToolUse` payload for `profile=goal-verifier` — the same auto-mint spike as §3 applies (if `tool_response.output` is a stub, the mint may need `read_subagent`).
+- [ ] **Contradictory verdict demotes:** a `goal-verifier` result whose `goal-verdict` JSON lists findings (or per-item `REFUTED`/`UNVERIFIABLE` lines) but ends `GATES_VERDICT: PASS` → counted as **FAIL**, not minted.
+- [ ] After completion, edit a workspace file → `goal-status` back to `ACTIVE` (audit `goal_reopened`); Stop **re-blocked** in the same session (attach survived completion).
 - [ ] `run_subagent` with `profile=goal-verifier` while unattached or paused → **blocked**, even after markers exist (unless `DEVIN_GATES_OFF` or a session `/gate-bypass` is set).
-- [ ] Three FAIL verdicts → `goal-update --blocked --reason "…"` → Stop allowed; `goal-status` shows `blocked` + reason.
+- [ ] **Auto-block on repeated gaps:** two consecutive FAIL sweeps flagging the *same* gap → goal auto-blocks; `goal-status` shows `BLOCKED` with `blocked_reason=no-progress: …` (the reason is surfaced by `goal-status`, not only in the signed file); Stop allowed; audit `goal_no_progress`.
+- [ ] **BLOCKED verdict auto-block:** a verifier `GATES_VERDICT: BLOCKED` with a `goal-verdict` JSON block (`blocking: unverifiable` findings + `blocker_key`) → goal auto-blocks `blocking: <key>`; a resume + same `blocker_key` re-block escalates to `external-repeat:`; audit `goal_blocked_auto` / `goal_blocker_repeat`.
+- [ ] **Sweep cap:** `DEVIN_GOAL_SWEEP_CAP=2` + two FAIL sweeps with *distinct* gaps → `sweep-cap: 2/2` (identical gaps hit `no-progress:` at 2 first); `goal-status` shows the effective cap (and `stall` counter) on the status line.
+- [ ] **Blocked streak:** `goal-update --blocked --reason "…"` attempts 1–2 are refused (`blocked attempt N/3 — keep working`, audit `goal_blocked_attempt`); attempt 3 is honored. `--blocker-key` without `--blocked` is rejected.
+- [ ] **Unclaimed work:** `DEVIN_GOAL_UNCLAIMED_CAP=3` + 3 workspace mutations without a claim → auto-block `unclaimed-work:` (nudge reminders start earlier, at `DEVIN_GOAL_CLAIM_NUDGE`).
+- [ ] **Infra-error streak:** `DEVIN_GOAL_ERROR_STREAK=3` + 3 consecutive failed `run_subagent`/`mcp_call_tool`/`mcp__*`/`write_to_process` calls → auto-block `infra-errors:`; `goal-status` shows `tool_errors`. `exec`/`read`/`grep`/`write`/`edit` failures must **not** count — record a failed `exec` and confirm the streak is unchanged.
+- [ ] **Strategist:** 3 consecutive FAIL sweeps with *different* gap sets → `strategist_pending` set, cap +2, stall threshold 5; `--claim-done` refused until `strategy.md` exists under `goal_allow_root` (fresh — written after the fire); `goal-strategist` spawn works only while pending.
 - [ ] `goal-clear --reason "…"` → `goal-status` prints `goal: none`; a late verifier verdict is ignored (audit `goal_verifier_late_result`).
 - [ ] **Reminder observability (unverified):** record whether hook stdout on `SessionStart` / `UserPromptSubmit` / `PostCompaction` actually reaches the agent. If it does not, the goal still survives on disk — `/goal status` recovers it; degraded, not broken.

@@ -63,7 +63,7 @@ List every input finding. Then any unrelated notes (not verdicts).
 
 ## GATES_VERDICT (mandatory last line)
 
-This profile **does not mint** `code-passed`. The gate witnesses `PostToolUse` output with a multiline search; the **first** matching line wins. Emit **exactly one** `GATES_VERDICT` line in the whole response. It must be unfenced, the last line of the entire response, and match `GATES_VERDICT: PASS|FAIL|BLOCKED` (one of those three words in place of the pipe list — do not emit the pipe-separated form). Never quote those three values as their own lines anywhere else — not in examples, fences, or restated instructions.
+This profile **does not mint** `code-passed`. The gate witnesses `PostToolUse` output with a multiline search; the **last** matching line wins. Emit **exactly one** `GATES_VERDICT` line in the whole response. It must be unfenced, the last line of the entire response, and match `GATES_VERDICT: PASS|FAIL|BLOCKED` (one of those three words in place of the pipe list — do not emit the pipe-separated form). Never quote those three values as their own lines anywhere else — not in examples, fences, or restated instructions.
 
 No trailing commentary after that line.
 

@@ -215,7 +215,7 @@ Full walkthrough: **[docs/usage.md](docs/usage.md#how-to-use-design)**.
 | `/gate-status` | Print lock state. Read-only. |
 | `/goal <objective>` | Gate-tracked objective. Stop stays blocked until a fresh `goal-verifier` PASSes. `status` / `pause` / `resume` / `clear` manage the run. |
 
-`/goal` is the gate-backed version, not a prompt imitation: the gate owns signed goal state, and only a fresh `goal-verifier` `GATES_VERDICT: PASS` can mark it complete. What it cannot do — host-driven rounds, a token budget, mid-turn pause — is documented in [What we did not copy](docs/how-it-works.md#what-we-did-not-copy).
+`/goal` is the gate-backed version, not a prompt imitation: the gate owns signed goal state, and only a fresh `goal-verifier` `GATES_VERDICT: PASS` can mark it complete — and only after an enforced `goal-update --claim-done` binds the claim to the current tree. The gate also owns the stop — identical gaps across consecutive FAIL sweeps, a sweep cap, a non-model-fixable `BLOCKED`, a repeated external blocker, unclaimed work, or an infra-error streak auto-block the goal with an honest `blocked_reason` instead of looping forever, and a stopped goal needs the user's next prompt before it can resume. What it cannot do — host-driven rounds, a token budget, mid-turn pause — is documented in [What we did not copy](docs/how-it-works.md#what-we-did-not-copy).
 
 ## Bypass
 
