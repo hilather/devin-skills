@@ -12,7 +12,7 @@ Skills tell Devin *what* to do. The gate hook is the only layer that can *stop* 
 | --- | --- | --- |
 | Devin builtin `/plan` | Host read-only draft, approval UI, `exit_plan_mode`. Not our code. | No |
 | User/project hooks (`devin-gates.py`) | HMAC markers, write-lock, Stop-lock, audited bypass, signed goal state. | **Yes** |
-| Custom subagents | Read-only personas (`design-writer`, `design-reviewer`, `plan-skeptic`, `finding-skeptic`, `code-skeptic`, `goal-verifier`), `model: swe-2-high`. | No |
+| Custom subagents | Read-only personas (`design-writer`, `design-reviewer`, `plan-skeptic`, `finding-skeptic`, `code-skeptic`, `goal-verifier`, `goal-strategist`), `model: swe-2-high`. | No |
 | Skills | Orchestrators and slash commands. Prompts only. | No |
 | Tiny `AGENTS.md` | Pointers, not playbooks. | No |
 | Optional `plugin/` | Skills + agents + the tiny rule, for sharing. **No `hooks.json`.** | No — plugin hooks fail-open |
@@ -75,6 +75,18 @@ This repo is an approximation of a Grok Build workflow on Devin CLI (verified on
 **Do not ship a prompt-only `/goal` imitation.** Grok `/goal` is host logic, not a prompt: token budget, pause/resume/clear, autonomous multi-round driver, and an independent evidence review that can **refuse** completion. A skill named `/goal` that only *says* "keep going" would let the parent mark itself complete — it would *look* like Grok `/goal` and fail silently. That is still forbidden.
 
 What ships instead is the gate-backed approximation: the durable parts of the harness — signed state, the completion gate, the independent refusal — live in the gate, the only layer that can enforce them.
+
+```mermaid
+flowchart LR
+  W[Parent works] --> C[claim-done]
+  C --> V[fresh goal-verifier]
+  V -->|PASS| Done[gate mints complete]
+  V -->|FAIL| W
+  V -->|auto-block| U[Ask the user]
+  U -->|resume after user prompt| W
+```
+
+Everyday how-to and the full loop: [usage.md](usage.md#how-to-use-goal).
 
 - **`/goal <objective>`** registers a workspace-scoped objective in an HMAC-signed goal file and attaches the session. `set-goal --kind code-change|research|analysis|general` records the goal's shape — it biases the verifier's evidence emphasis but is not itself enforcement. `goal-status` reports telemetry (`kind`, `claims`, `updates`, `age`, `tool_errors`) alongside the enforcement counters.
 - **`goal-update`** is the audited progress-reporting analog (`--message`, `--claim-done`, `--blocked --reason [--blocker-key k]`).

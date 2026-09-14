@@ -79,6 +79,8 @@ Default is **locked**, even if you never ran `/plan`. Tiny tasks skip the ceremo
 
 `/design` does not unlock the workspace. It only writes a spec under a gate-issued design root. You still `/plan` → `/skeptic-plan` before implementing.
 
+`/goal` does not unlock writes either, and it does not walk a PR list. It tracks **one** verifiable objective. While it is `active`, Stop stays blocked until a fresh `goal-verifier` PASSes — even if nothing mutated.
+
 ### How `/design` goes
 
 A read-only `design-writer` drafts. A read-only `design-reviewer` attacks. The parent is the only process that writes files. They loop until zero open issues. No round cap. Nits count.
@@ -122,6 +124,36 @@ flowchart TD
 
 Do not add a skill named `plan`. `/goal` exists, but it tracks one verifiable objective — it does not walk a PR list for you. Details: **[docs/usage.md](docs/usage.md#from-design-to-implementation)**.
 
+### How `/goal` goes
+
+Work → claim → verify. You cannot mark it done. Only a **fresh** `goal-verifier` PASS mints `complete`. Implementation goals still go through `/skeptic-plan` and `/skeptic-review`; `/goal` composes with those locks, it does not bypass them.
+
+```mermaid
+flowchart TD
+  A["/goal objective"] --> B[Gate signs the goal and attaches this session]
+  B --> C[Write checklist.md and snapshot the baseline]
+  C --> D[Do the work]
+  D --> E["goal-update — what changed"]
+  E --> F{Checklist looks done?}
+  F -->|no| D
+  F -->|yes| G["goal-update --claim-done"]
+  G --> H[Fresh goal-verifier]
+  H -->|PASS| I["status = complete"]
+  H -->|FAIL — model can fix| J[Fix the named gaps]
+  J --> G
+  H -->|3 FAILs with different gaps| S[goal-strategist — change the HOW]
+  S --> T[Write strategy.md]
+  T --> D
+  H -->|BLOCKED or auto-block| K[Ask you]
+  K --> L["Your next prompt, then /goal resume --reason"]
+  L --> D
+  I --> M{Later source edit?}
+  M -->|yes| N[Goal reopens — Stop blocks again]
+  N --> D
+```
+
+Pause, resume, and clear are audited (`--reason` required except attach-only resume of an already-`active` goal). Full walkthrough: **[docs/usage.md](docs/usage.md#how-to-use-goal)**.
+
 ## Install
 
 Needs [Devin CLI](https://docs.devin.ai/cli) and Python 3. No npm, no extra packages.
@@ -158,6 +190,8 @@ Everyday loop, in Devin:
 2. **`/skeptic-plan`**. A fresh `plan-skeptic` subagent tries to break the plan (wrong assumptions, missing steps, unverified claims). Writes unlock only on `GATES_VERDICT: PASS`.
 3. **Implement.** Devin can edit now.
 4. **`/skeptic-review`**. A finding-skeptic, then a code-skeptic, review a frozen diff. Stop unlocks only on a code-skeptic PASS.
+
+Optional: wrap a checkable objective in **[`/goal`](#how-to-use-goal)** so Stop stays blocked until a fresh `goal-verifier` PASSes — even after the code skeptic.
 
 Check the lock any time:
 
@@ -202,6 +236,41 @@ You get files under `~/.cache/devin-skills/design/<id>/`:
 Then **stop using `/design`**. It does not implement. Take the first `### PR N:` through `/plan` → `/skeptic-plan` → implement → `/skeptic-review`.
 
 Full walkthrough: **[docs/usage.md](docs/usage.md#how-to-use-design)**.
+
+### How to use /goal
+
+Use this when the work has a **checkable done condition** that should outlive one turn: "get the test suite green", "the health endpoint returns 200", "this migration is reversible." Skip it for a typo. Do not use it as a PR-list walker — that is still `/plan` per slice.
+
+```
+/goal get the full test suite green
+```
+
+What happens:
+
+1. The gate registers a signed workspace goal and attaches this session. **Stop is blocked** while it is `active`.
+2. Devin writes a `checklist.md` (the contract the verifier will judge) and snapshots it.
+3. It does the work. Code changes still need `/skeptic-plan` before writes and `/skeptic-review` before a code-level "done."
+4. When the checklist looks finished: claim, then a **fresh** `goal-verifier`. Devin cannot mint complete itself.
+5. **PASS** → `complete`. **FAIL** → fix the named gaps, claim again. **Auto-block** (spinning, sweep cap, infra down, …) → Devin asks you. Resume needs **your next prompt** plus a reason.
+
+You get files under `~/.cache/devin-skills/goal/<id>/`:
+
+| File | What it is |
+| --- | --- |
+| `checklist.md` | Per-item done contract. The verifier judges this, not vibes. |
+| `evidence/` | Test output, diffs, transcripts — the verifier cannot run commands. |
+| `strategy.md` | Only after a whack-a-mole fire. Change the HOW, not the WHAT. |
+
+Manage a run:
+
+```
+/goal status
+/goal pause --reason stepping out
+/goal resume --reason back
+/goal clear --reason abandoning
+```
+
+A later source edit after `complete` **reopens** the goal. Full walkthrough: **[docs/usage.md](docs/usage.md#how-to-use-goal)**.
 
 ## Commands
 
@@ -256,7 +325,7 @@ Live Devin checklist (throwaway repo): **[docs/smoke-test.md](docs/smoke-test.md
 
 | Doc | What's in it |
 | --- | --- |
-| [docs/usage.md](docs/usage.md) | Everyday workflow, **how to use /design**, commands, bypass, FAQ |
+| [docs/usage.md](docs/usage.md) | Everyday workflow, **how to use /design**, **how to use /goal**, commands, bypass, FAQ |
 | [docs/install.md](docs/install.md) | Install, flags, herdr, project mode |
 | [docs/uninstall.md](docs/uninstall.md) | Clean removal and backup restore |
 | [docs/how-it-works.md](docs/how-it-works.md) | Layers, Grok mapping, honest limits |
