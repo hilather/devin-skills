@@ -283,6 +283,12 @@ def remove_copied_gate():
     goal = os.path.join(PREFIX, "hooks", "devin_gates_goal.py")
     if os.path.islink(goal) or os.path.isfile(goal):
         os.remove(goal)
+    execplan = os.path.join(PREFIX, "hooks", "devin_gates_execplan.py")
+    if os.path.islink(execplan) or os.path.isfile(execplan):
+        os.remove(execplan)
+    validator = os.path.join(PREFIX, "hooks", "devin_execplan_validate_plan.py")
+    if os.path.islink(validator) or os.path.isfile(validator):
+        os.remove(validator)
 
 
 def main():

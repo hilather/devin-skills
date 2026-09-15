@@ -38,7 +38,7 @@ In plain English:
 
 1. Creates `~/.config/devin/{skills,agents,hooks}` and a private state directory (mode `0700`).
 2. Generates a random HMAC secret once (`os.urandom` 32 bytes, mode `0600`). Reinstall does not rotate it.
-3. **Splices** the goal feature into the repo copy of `devin-gates.py` by running `hooks/apply_goal_patch.py` when present (idempotent; the repo copy stays canonical), then **copies** `hooks/devin-gates.py` — and `hooks/devin_gates_goal.py` when present — into `~/.config/devin/hooks/`. A symlink back to this repo would let a later edit of the lock file bypass itself.
+3. **Splices** the goal and execute-plan features into the repo copy of `devin-gates.py` by running `hooks/apply_goal_patch.py` and `hooks/apply_execplan_patch.py` when present (idempotent; the repo copy stays canonical), then **copies** `hooks/devin-gates.py` — and `hooks/devin_gates_goal.py`, `hooks/devin_gates_execplan.py`, and the execute-plan validator (as `hooks/devin_execplan_validate_plan.py`) when present — into `~/.config/devin/hooks/`. A symlink back to this repo would let a later edit of the lock file bypass itself.
 4. Records an install hash and the real path it copied from.
 5. **Symlinks** each skill and agent into `~/.config/devin/` so slash commands are `/design`, not `/devin-skills:design`. Refuses to clobber a real file unless you pass `--force`.
 6. Backs up `config.json` to `config.json.bak-devin-skills-<timestamp>`, then merges [hooks/hook-entries.json](../hooks/hook-entries.json):

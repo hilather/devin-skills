@@ -224,7 +224,35 @@ The writer is required to end the spec with `## PR Plan`, shaped so a later exec
 
 Each PR must be independently reviewable and mergeable. Missing `## PR Plan` is at least a major review finding. Step 6 of `/design` extracts that section and presents it to you. Then the skill **stops**. Workspace source is still locked.
 
-No Devin skill walks `PR 1 … PR N` on its own — `/goal` tracks a single verifiable objective, not a PR list. The honest execute path is Devin's built-in `/plan`, one slice at a time:
+## How to use /execute-plan
+
+`/execute-plan` is the skill that walks `PR 1 … PR N`. It is a port of Grok Build's `/execute-plan`, adapted to Devin's realities.
+
+```
+/execute-plan ~/.cache/devin-skills/design/<id>/design-doc.md
+```
+
+What it does, in order:
+
+1. Asks the gate for a run root (`allow-exec-plan` → `~/.cache/devin-skills/execute-plan/<PLAN_ID>/`, mode `0700`).
+2. Scans prior runs' `lessons.md` for recurring issue patterns.
+3. Validates the `## PR Plan` DAG deterministically (`exec-plan-validate` — cycles, unresolved deps, duplicate ids) and linearizes it level-major.
+4. If no `plan-skeptic` marker exists, runs **one embedded plan-skeptic sweep** on the design doc, then confirms the mint before touching git. FAIL → it reports findings and stops; `/skeptic-plan` owns the triage loop.
+5. Per PR, sequentially: `git checkout -B <branch> <prev_tip>` (linear stack — each PR builds on the last completed commit), **implements inline itself**, verifies, commits, then a fresh read-only `pr-reviewer` subagent reviews the diff and the parent fixes findings in an uncapped loop.
+6. On failure: discards the partial work (`reset --hard` + `clean -fd`), marks the PR failed, and **cascade-skips** its dependents.
+7. Pushes the stack with `git push --force-with-lease` (never `--force`), prints compare URLs, and with `--auto-pr` + `gh` + a GitHub remote creates draft PRs bottom-up.
+
+Flags: `--dry-run` (print order/levels/branches, exit before the sweep — never mints), `--resume <PLAN_ID>`, `--instructions "..."`, `--auto-pr`, `--effort N` (no-op, parsed for parity), `--concurrency N` (forced to 1), `--no-graphite` (no-op; plain-git is the only mode).
+
+Resume: `/execute-plan --resume <PLAN_ID>` re-issues the run root, reloads `state.json`, re-runs the plan preflight, normalizes the tree, and reconciles node statuses under a **positional retry rule** — a node can only be retried if no later node in the stack already completed. Ineligible retries stay failed and are reported; retrying them would require rebuilding completed successors, which v1 deliberately does not do.
+
+Honest gaps vs Grok: **no parallel implementers** (no subagent isolation), **the parent implements** (child `write` hook re-entry is unverified — the reviewer is the only subagent, and it is read-only so it can never mint `code-passed` mid-run), **no Graphite**, **no `memory.py`** (`lessons.md` per run stands in), **no mid-stack retry**, and `main` is hardcoded as the base branch. When the run finishes, the Stop-lock still applies — `/skeptic-review` covers the whole stack before claiming done.
+
+Plugin installs (no gate): `allow-exec-plan` does not exist — the run proceeds unenforced with a printed note, and if the validator is also unreachable it warns `unverified plan — validator unavailable` and continues on the self-parse alone.
+
+### Manual alternative
+
+The per-slice path still works when you want human approval per PR — `/goal` tracks a single verifiable objective, not a PR list:
 
 ```
 /plan implement PR 1 from the design doc at ~/.cache/devin-skills/design/<id>/design-doc.md
@@ -252,7 +280,7 @@ flowchart TD
   H -->|no| I[Done]
 ```
 
-Small change, one PR in the plan? One `/plan` through the whole spec is fine. Multi-PR design? Do not squash them into one implementation plan unless you explicitly want that — the skeptic will (correctly) complain if the slice is not independently mergeable.
+Small change, one PR in the plan? One `/plan` through the whole spec is fine.
 
 Do **not** name a skill `plan`. Do **not** ask `/design` to start implementing. Do **not** `/gate-bypass` just to skip from spec to code unless the work is actually tiny.
 
@@ -403,6 +431,7 @@ Honest gaps (no host rounds, no token budget, parent still pastes the evidence b
 | --- | --- |
 | `/plan …` | Built-in read-only draft. Approve in Devin's UI. |
 | `/design …` | Spec: writer/reviewer loop. See [How to use /design](#how-to-use-design). |
+| `/execute-plan <doc>` | Walks the PR Plan: validate → per-PR implement + review → pushed branch stack. See [How to use /execute-plan](#how-to-use-execute-plan). |
 | `/goal …` | Gate-tracked objective. Stop blocks until a fresh `goal-verifier` PASSes. `status`/`pause`/`resume`/`clear`. See [How to use /goal](#how-to-use-goal). |
 | `/skeptic-plan` | Attacks the plan. Lifts the write-lock on PASS. |
 | `/skeptic-review` | Attacks the frozen diff. Lifts the Stop-lock on PASS. |
@@ -438,6 +467,8 @@ The lock is not "no tools." Read, grep, and similar stay available. Plan files u
 
 `/goal` management also stays available while locked: the goal CLI subcommands (`set-goal`, `goal-update`, `goal-pause`, `goal-resume`, `goal-clear`, `goal-status`, `goal-baseline`) are allowlisted on `exec`, and the attached session can write under the goal's `goal_allow_root` (checklist, evidence, `strategy.md`) — those paths live outside the workspace, so they never reopen the goal.
 
+`/execute-plan` is likewise usable while locked: `allow-exec-plan` and `exec-plan-validate` are allowlisted, the session can write under `~/.cache/devin-skills/execute-plan/<PLAN_ID>/`, and `--dry-run` runs end-to-end (it exits before the plan-skeptic sweep, so it never mints). The first mutating git op needs `plan-skeptic: present` — the embedded sweep covers a missing one.
+
 What is blocked: workspace source writes, general-purpose subagents, and mutating MCP (create issue, push, …) until the plan marker exists.
 
 ## FAQ
@@ -452,7 +483,7 @@ What is blocked: workspace source writes, general-purpose subagents, and mutatin
 No and no. Writes still need `/skeptic-plan`. PR slices still need `/plan`. `/goal` only owns the *completion* claim.
 
 **Does `/design` implement the PR Plan?**
-No. It writes and presents the plan. You (or a later turn) run `/plan` on a slice, then `/skeptic-plan`. See [From design to implementation](#from-design-to-implementation).
+No. It writes and presents the plan. `/execute-plan <design-doc>` walks it — or run `/plan` per slice yourself. See [How to use /execute-plan](#how-to-use-execute-plan).
 
 **Devin still cannot write after I approved `/plan`.**
 That is correct. Approval is not a skeptic. Run `/skeptic-plan`.

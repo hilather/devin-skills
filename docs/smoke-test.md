@@ -95,3 +95,15 @@ Implement the tiny change.
 - [ ] **Strategist:** 3 consecutive FAIL sweeps with *different* gap sets → `strategist_pending` set, cap +2, stall threshold 5; `--claim-done` refused until `strategy.md` exists under `goal_allow_root` (fresh — written after the fire); `goal-strategist` spawn works only while pending.
 - [ ] `goal-clear --reason "…"` → `goal-status` prints `goal: none`; a late verifier verdict is ignored (audit `goal_verifier_late_result`).
 - [ ] **Reminder observability (unverified):** record whether hook stdout on `SessionStart` / `UserPromptSubmit` / `PostCompaction` actually reaches the agent. If it does not, the goal still survives on disk — `/goal status` recovers it; degraded, not broken.
+
+## 11. `/execute-plan`
+
+Needs a design doc with a `## PR Plan` — `/design` output, or a hand-written one in the same shape (`### PR N:` + files/dependencies/description).
+
+- [ ] **Locked dry-run:** fresh locked session, `/execute-plan <doc> --dry-run` → prints linearized order, levels, branch names, max parallelism, then exits. No `plan-skeptic` sweep spawned; `/gate-status` still shows `plan-skeptic: missing`. `python3 ~/.config/devin/hooks/devin-gates.py status` prints `exec-plan: <id>`.
+- [ ] **Embedded sweep mints:** `/execute-plan <doc>` (no `--dry-run`) while locked → one fresh `plan-skeptic` spawn → PASS → `status` shows `plan-skeptic: present` before the first `git checkout`. FAIL → findings printed, run stops, no git mutation.
+- [ ] **Two-PR run:** a small two-PR plan completes end-to-end — each `execute-plan/<PLAN_ID>-pr-<N>-<slug>` branch exists; `pr-2`'s branch contains `pr-1`'s commit (linear stack); the first post-unlock `pr-reviewer` spawn succeeds (this is where a post-`plan-passed` profile allowlist would surface — record a refusal if one happens); `review-<pr>.md` files landed under the run root.
+- [ ] **Compare URLs:** after the push, the report lists compare URLs (or draft PRs with `--auto-pr` + `gh`); `git push --force-with-lease` used, never `--force`; `main` was never committed to.
+- [ ] **Resume mid-stack:** kill the session mid-run (e.g. after `pr-1` completes, during `pr-2`), dirty the tree, then `/execute-plan --resume <PLAN_ID>` → tree normalized (discard reported), reconciled under the positional rule, `prev_tip` derived from `pr-1`'s commit, run continues. A `failed` node *before* a `completed` one stays terminal with the ineligible-retry report — not silently re-based.
+- [ ] **Pre-feature install:** on a prefix installed *before* this feature, a locked `/execute-plan` run fails `allow-exec-plan` cleanly with a re-run-`install.sh` hint — no `mkdir -p` fallback while locked.
+- [ ] **Plugin mode:** `/devin-skills:execute-plan` in a gate-free install prints the `unenforced run` note; if the validator script is also unreachable it warns `unverified plan — validator unavailable` and continues on the self-parse.

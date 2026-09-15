@@ -12,7 +12,7 @@ Skills tell Devin *what* to do. The gate hook is the only layer that can *stop* 
 | --- | --- | --- |
 | Devin builtin `/plan` | Host read-only draft, approval UI, `exit_plan_mode`. Not our code. | No |
 | User/project hooks (`devin-gates.py`) | HMAC markers, write-lock, Stop-lock, audited bypass, signed goal state. | **Yes** |
-| Custom subagents | Read-only personas (`design-writer`, `design-reviewer`, `plan-skeptic`, `finding-skeptic`, `code-skeptic`, `goal-verifier`, `goal-strategist`), `model: swe-2-high`. | No |
+| Custom subagents | Read-only personas (`design-writer`, `design-reviewer`, `plan-skeptic`, `finding-skeptic`, `code-skeptic`, `goal-verifier`, `goal-strategist`, `pr-reviewer`), `model: swe-2-high`. | No |
 | Skills | Orchestrators and slash commands. Prompts only. | No |
 | Tiny `AGENTS.md` | Pointers, not playbooks. | No |
 | Optional `plugin/` | Skills + agents + the tiny rule, for sharing. **No `hooks.json`.** | No — plugin hooks fail-open |
@@ -69,6 +69,7 @@ This repo is an approximation of a Grok Build workflow on Devin CLI (verified on
 | Plan skeptic before implement (3-sweep cap, BLOCKED, failed-sweep autopsy) | `/skeptic-plan` + `plan-skeptic` + **write-lock hook**. Fresh subagent per sweep. Lock lifts only on `GATES_VERDICT: PASS`. | Hook cannot run the skeptic (timeouts). A parent that jailbreaks the skeptic via the task prompt can still produce PASS. Residual, documented. |
 | Code skeptic at done (finding-skeptic + implementation sweep) | `/skeptic-review` + `finding-skeptic` + `code-skeptic` + **Stop hook**. Auto-mint requires a `code-skeptic` PASS whose witness `source_seq` is ≥ current `source_seq`. | Same residual. Stop-loop guard is required. Parent must embed the **full** `git diff` in the task; large diffs may truncate. |
 | Independent skeptic (fresh, no attachment) | Fresh Devin subagent per sweep; parent must not self-review. Profiles omit write/edit/`exec`. | Parent still writes the task prompt (jailbreak residual) **and** the pasted diff. |
+| `/execute-plan` (PR-Plan DAG → parallel worktree implementers → reviewer loops → Graphite/plain-git stack) | **`/execute-plan` skill + `devin_gates_execplan` splice.** `allow-exec-plan` issues a run root (`~/.cache/devin-skills/execute-plan/<PLAN_ID>/`); `exec-plan-validate` runs the vendored `validate-plan.py` while locked; the parent implements each PR inline on a linear branch stack (`checkout -B <branch> <prev_tip>`); a read-only `pr-reviewer` reviews each diff; `--resume` reconciles under a positional retry rule. | Sequential only — no subagent isolation, `wait_any`, or kill. Parent implements (child `write` re-entry unverified). `pr-reviewer` is non-minting — a `code-skeptic` PASS mid-run would falsely satisfy the Stop-lock on partial coverage. Plain-git only, no `memory.py` (`lessons.md` stands in), no mid-stack retry, `main` hardcoded. |
 
 ## What we did not copy
 
@@ -139,16 +140,13 @@ flowchart LR
 
 Writer and reviewer have no `write` / `edit` / `exec`. That is why the parent copies fences. Child `write` is not assumed to re-enter hooks. Full loop: [usage.md](usage.md#how-to-use-design).
 
-### The PR Plan is not an executor
+### The PR Plan walker: `/execute-plan`
 
-`design-writer` must emit `## PR Plan` with `### PR N:` slices (files, dependencies, description) "so a later execute path can parse it." `/design` Step 6 **presents** that plan. Nothing in this repo **runs** it.
+`design-writer` must emit `## PR Plan` with `### PR N:` slices (files, dependencies, description) so the execute path can parse it deterministically. `/execute-plan <design-doc>` runs it end-to-end:
 
-The execute path is:
+- **Gate affordances while locked** ship via `hooks/devin_gates_execplan.py` — the same splice pattern as `/goal` (`hooks/apply_execplan_patch.py` wraps `dispatch`/`run_hook`/`main` before the `if __name__` anchor; install-time only, the gate source is never edited in-session). It adds `allow-exec-plan [--id <8hex>]` (run root `~/.cache/devin-skills/execute-plan/<PLAN_ID>/`, `0700`, `exist_ok` for resume, session keys `exec_plan_id`/`exec_plan_allow_root`, last call wins), `exec-plan-validate --file <path>` (runs `hooks/devin_execplan_validate_plan.py` — the vendored validator installed beside the gate — with a 30 s timeout; expanduser → realpath → protected-path refusal; rc 0/1 relayed, rc 2 on infra failure so the skill can fall back), locked-phase exec-allowlisting for both subcommands, write-allow under the run root, a `status` line `exec-plan: <id>`, and a `_bind`-time `READONLY_PROFILES += pr-reviewer` so reviewer spawns do not phantom-bump `source_seq`. Missing module → silent no-splice; while locked, `allow-exec-plan` failure stops the run.
+- **Linear stack ancestry** replaces Grok's DAG ancestry + assembly-time cherry-pick: each PR branch is `checkout -B`'d off the last `completed` node's `commit_sha` at the top of its iteration. Sequential topological execution makes that base contain every declared dependency's commits; `dependencies` govern readiness and cascade-skip only. No merges, no cherry-picks, no rebase path.
+- **Resume** normalizes the tree (`checkout -f main` → `reset --hard` → `clean -fd` when dirty or on a run branch), then reconciles *statuses only* under the positional retry rule — a node goes back to `pending` only when no later `linearized_order` node is `completed`. `prev_tip` is derived, never persisted.
+- **The reviewer never mints.** `pr-reviewer` is read-only and emits no `GATES_VERDICT`; the parent counts `Status: open` and runs the fix loop itself. `/skeptic-review` still covers the whole stack before done.
 
-- Devin builtin `/plan` (one slice, or the whole spec if it is small)
-- `/skeptic-plan` + write-lock
-- implement
-- `/skeptic-review` + Stop-lock
-- next PR
-
-A skill that loops those PRs until the spec is fully landed would be a host-driven `/goal` harness — `/goal` ships the gate-backed single-objective version instead (see the Grok mapping above), not a PR walker. See [From design to implementation](usage.md#from-design-to-implementation).
+The manual per-slice path (`/plan` → `/skeptic-plan` → implement → `/skeptic-review` per PR) remains the human-approval alternative. See [How to use /execute-plan](usage.md#how-to-use-execute-plan).

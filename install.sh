@@ -92,6 +92,9 @@ command -v python3 >/dev/null 2>&1 || {
 if [ -f "$SRC/hooks/apply_goal_patch.py" ]; then
   python3 "$SRC/hooks/apply_goal_patch.py" "$SRC/hooks/devin-gates.py" || exit 1
 fi
+if [ -f "$SRC/hooks/apply_execplan_patch.py" ]; then
+  python3 "$SRC/hooks/apply_execplan_patch.py" "$SRC/hooks/devin-gates.py" || exit 1
+fi
 
 mkdir -p "$PREFIX/skills" "$PREFIX/agents" "$PREFIX/hooks"
 mkdir -p "$STATE_DIR"
@@ -104,6 +107,15 @@ cp "$SRC/hooks/devin-gates.py" "$INSTALLED_GATE"
 if [ -f "$SRC/hooks/devin_gates_goal.py" ]; then
   rm -f "$PREFIX/hooks/devin_gates_goal.py"
   cp "$SRC/hooks/devin_gates_goal.py" "$PREFIX/hooks/devin_gates_goal.py"
+fi
+if [ -f "$SRC/hooks/devin_gates_execplan.py" ]; then
+  rm -f "$PREFIX/hooks/devin_gates_execplan.py"
+  cp "$SRC/hooks/devin_gates_execplan.py" "$PREFIX/hooks/devin_gates_execplan.py"
+fi
+if [ -f "$SRC/skills/execute-plan/scripts/validate-plan.py" ]; then
+  rm -f "$PREFIX/hooks/devin_execplan_validate_plan.py"
+  cp "$SRC/skills/execute-plan/scripts/validate-plan.py" \
+     "$PREFIX/hooks/devin_execplan_validate_plan.py"
 fi
 
 export DEVIN_SKILLS_INSTALL_PREFIX="$PREFIX"

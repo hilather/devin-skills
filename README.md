@@ -107,22 +107,19 @@ The doc must include **Key Decisions** and a **PR Plan**. `/design` **writes** t
 
 ### After design: implement the PR Plan
 
-The PR Plan is ordered, independently mergeable slices (`### PR 1:`, files, dependencies, description). A later execute path can parse that shape — there is no skill that walks it for you. Devin's built-in `/plan` is the implementation planner. Feed it one slice at a time (or the whole spec, if the change is small).
+The PR Plan is ordered, independently mergeable slices (`### PR 1:`, files, dependencies, description). `/execute-plan` walks it: validates the DAG, runs one embedded plan-skeptic sweep if no marker exists, implements each PR inline on a linear branch stack, runs a read-only `pr-reviewer` per PR, cascade-skips dependents on failure, and pushes the stack with compare URLs (or draft PRs with `--auto-pr`). `--resume <PLAN_ID>` picks up a crashed run mid-stack.
 
 ```mermaid
 flowchart TD
-  A["/design finished — PR Plan on disk"] --> B[Pick the next unmerged PR]
-  B --> C["/plan that slice — paste the spec"]
-  C --> D[You approve]
-  D --> E["/skeptic-plan"]
-  E -->|PASS| F[Implement that PR]
+  A["/design finished — PR Plan on disk"] --> B["/execute-plan <doc>"]
+  B --> C[validate + linearize]
+  C --> D[embedded plan-skeptic sweep if needed]
+  D --> E["per PR: implement → pr-reviewer → fix loop"]
+  E --> F["push stack + compare URLs"]
   F --> G["/skeptic-review"]
-  G -->|PASS| H{More PRs?}
-  H -->|yes| B
-  H -->|no| I[Done]
 ```
 
-Do not add a skill named `plan`. `/goal` exists, but it tracks one verifiable objective — it does not walk a PR list for you. Details: **[docs/usage.md](docs/usage.md#from-design-to-implementation)**.
+Alternatively, drive it yourself: Devin's built-in `/plan` is the implementation planner — feed it one slice at a time. Do not add a skill named `plan`. `/goal` exists, but it tracks one verifiable objective — it does not walk a PR list for you. Details: **[docs/usage.md](docs/usage.md#how-to-use-execute-plan)**.
 
 ### How `/goal` goes
 
@@ -233,7 +230,7 @@ You get files under `~/.cache/devin-skills/design/<id>/`:
 | `summary.md` | Short writer's summary. |
 | `review.md` | Review notes (open / addressed / wontfix). |
 
-Then **stop using `/design`**. It does not implement. Take the first `### PR N:` through `/plan` → `/skeptic-plan` → implement → `/skeptic-review`.
+Then **stop using `/design`**. It does not implement. Hand the doc to `/execute-plan <design-doc.md>` — or take each `### PR N:` through `/plan` → `/skeptic-plan` → implement → `/skeptic-review` yourself.
 
 Full walkthrough: **[docs/usage.md](docs/usage.md#how-to-use-design)**.
 
@@ -278,6 +275,7 @@ A later source edit after `complete` **reopens** the goal. Full walkthrough: **[
 | --- | --- |
 | `/plan` | **Built into Devin.** Read-only draft. Do not add a skill named `plan`. |
 | `/design` | Writer/reviewer loop. Writes a spec with **Key Decisions** and a **PR Plan**. Does not implement. |
+| `/execute-plan <doc>` | Walks the PR Plan end-to-end: validate → embedded plan-skeptic → per-PR implement + review → pushed branch stack. `--dry-run` / `--resume` / `--auto-pr`. |
 | `/skeptic-plan` | Independent plan skeptic. Lifts the **write-lock** on PASS. |
 | `/skeptic-review` | Finding-skeptic, then code-skeptic, on a frozen diff. Lifts the **Stop-lock** on PASS. Needs a passed plan first. |
 | `/gate-bypass <reason>` | Audited skip for this session. Reason is required. Not Devin's `/bypass` / `/yolo`. |
@@ -336,11 +334,13 @@ Live Devin checklist (throwaway repo): **[docs/smoke-test.md](docs/smoke-test.md
 ```
 hooks/devin-gates.py     # the lock
 hooks/devin_gates_goal.py # /goal state + CLI, spliced into the gate
-hooks/apply_goal_patch.py # the install-time splice
+hooks/devin_gates_execplan.py # /execute-plan root + validator CLI, spliced in
+hooks/apply_goal_patch.py # the install-time splices
+hooks/apply_execplan_patch.py
 hooks/hook-entries.json  # what install.sh merges into config.json
 install.sh / uninstall.sh
-skills/                  # /design /goal /skeptic-plan /skeptic-review /gate-bypass /gate-status
-agents/                  # six read-only personas
+skills/                  # /design /execute-plan /goal /skeptic-plan /skeptic-review /gate-bypass /gate-status
+agents/                  # eight read-only personas
 rules/AGENTS.md          # short pointers, not a playbook
 docs/                    # this documentation
 plugin/                  # optional share pack — no hooks

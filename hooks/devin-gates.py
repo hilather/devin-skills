@@ -1396,5 +1396,17 @@ except Exception:
     pass
 # devin-skills-goal:end
 
+# devin-skills-execplan:begin — managed by hooks/apply_execplan_patch.py; do not edit
+try:
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import devin_gates_execplan as _devin_execplan
+
+    dispatch = _devin_execplan.wrap_dispatch(dispatch)
+    run_hook = _devin_execplan.wrap_run_hook(run_hook)
+    main = _devin_execplan.wrap_main(main)
+except Exception:
+    pass
+# devin-skills-execplan:end
+
 if __name__ == "__main__":
     sys.exit(main())

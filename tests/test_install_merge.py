@@ -578,6 +578,61 @@ class InstallMergeTest(unittest.TestCase):
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertIn("goal: none", proc.stdout)
 
+    def test_execplan_files_installed_and_uninstalled(self):
+        self.install()
+        hooks_dir = os.path.join(self.prefix, "hooks")
+        for name, src_rel in (
+            ("devin_gates_execplan.py", "hooks/devin_gates_execplan.py"),
+            (
+                "devin_execplan_validate_plan.py",
+                "skills/execute-plan/scripts/validate-plan.py",
+            ),
+        ):
+            installed = os.path.join(hooks_dir, name)
+            self.assertTrue(os.path.isfile(installed), name)
+            self.assertFalse(os.path.islink(installed), name)
+            inst_st = os.stat(installed)
+            src_st = os.stat(os.path.join(ROOT, src_rel))
+            self.assertNotEqual(
+                (inst_st.st_ino, inst_st.st_dev),
+                (src_st.st_ino, src_st.st_dev),
+            )
+            self.assertEqual(
+                sha256_file(installed), sha256_file(os.path.join(ROOT, src_rel))
+            )
+        self.uninstall()
+        for name in ("devin_gates_execplan.py", "devin_execplan_validate_plan.py"):
+            self.assertFalse(os.path.lexists(os.path.join(hooks_dir, name)))
+
+    def test_installed_gate_has_execplan_splice_and_cli(self):
+        self.install()
+        installed = os.path.join(self.prefix, "hooks", "devin-gates.py")
+        with open(installed, "r", encoding="utf-8") as fh:
+            text = fh.read()
+        self.assertIn("devin-skills-execplan:begin", text)
+        self.assertIn("import devin_gates_execplan", text)
+        env = self.env.copy()
+        env["DEVIN_SESSION_ID"] = "install-test-session"
+        proc = subprocess.run(
+            ["python3", installed, "allow-exec-plan", "--id", "abcd1234"],
+            env=env,
+            cwd=self.tmpdir,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertIn("plan_id=abcd1234", proc.stdout)
+        self.assertIn("exec_plan_allow_root=", proc.stdout)
+        proc = subprocess.run(
+            ["python3", installed, "status"],
+            env=env,
+            cwd=self.tmpdir,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertIn("exec-plan: abcd1234", proc.stdout)
+
     def test_src_without_goal_files_still_installs(self):
         # A src tree lacking the goal module/patcher installs a gate whose
         # splice block degrades gracefully (module import swallowed).
