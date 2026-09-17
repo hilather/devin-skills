@@ -1,5 +1,5 @@
 #!/bin/sh
-# Remove only our gate entries, copied script, AGENTS.md span, and our symlinks.
+# Remove our skill/agent symlinks, AGENTS.md span, and leftover gate files/hooks.
 set -eu
 
 usage() {
@@ -8,8 +8,8 @@ Usage: sh uninstall.sh [--prefix DIR] [--src DIR] [--project] [--purge] [--help]
 
   --prefix DIR   Install root (default: $HOME/.config/devin)
   --src DIR      Repo root (default: directory of this script)
-  --project      Also strip gate entries from .devin/hooks.v1.json
-  --purge        Delete $STATE_DIR (secret, audit, hashes)
+  --project      Also unlink skills/agents under .devin/ and strip leftover gates
+  --purge        Delete leftover $STATE_DIR (old secret/audit from the lock)
   --help         Show this help
 
 Never touches herdr-agent-state.sh.
@@ -103,6 +103,12 @@ PURGE = os.environ.get("DEVIN_SKILLS_INSTALL_PURGE") == "1"
 PROJECT_DIR = os.path.realpath(os.environ.get("DEVIN_SKILLS_INSTALL_PROJECT_DIR") or os.getcwd())
 BEGIN = "<!-- devin-skills:begin -->"
 END = "<!-- devin-skills:end -->"
+LEFTOVER_GATES = (
+    "devin-gates.py",
+    "devin_gates_goal.py",
+    "devin_gates_execplan.py",
+    "devin_execplan_validate_plan.py",
+)
 
 
 def fail(msg):
@@ -266,29 +272,26 @@ def unlink_skills_agents(dest_root):
         for name in os.listdir(dest_skills):
             dest = os.path.join(dest_skills, name)
             src = os.path.join(skills_src, name)
-            if is_our_symlink(dest, src):
+            if is_our_symlink(dest, src) or (
+                os.path.islink(dest) and SRC in os.path.normpath(os.readlink(dest))
+            ):
                 os.remove(dest)
     if os.path.isdir(dest_agents):
         for name in os.listdir(dest_agents):
             dest = os.path.join(dest_agents, name)
             src = os.path.join(agents_src, name)
-            if is_our_symlink(dest, src):
+            if is_our_symlink(dest, src) or (
+                os.path.islink(dest) and SRC in os.path.normpath(os.readlink(dest))
+            ):
                 os.remove(dest)
 
 
 def remove_copied_gate():
-    path = os.path.join(PREFIX, "hooks", "devin-gates.py")
-    if os.path.islink(path) or os.path.isfile(path):
-        os.remove(path)
-    goal = os.path.join(PREFIX, "hooks", "devin_gates_goal.py")
-    if os.path.islink(goal) or os.path.isfile(goal):
-        os.remove(goal)
-    execplan = os.path.join(PREFIX, "hooks", "devin_gates_execplan.py")
-    if os.path.islink(execplan) or os.path.isfile(execplan):
-        os.remove(execplan)
-    validator = os.path.join(PREFIX, "hooks", "devin_execplan_validate_plan.py")
-    if os.path.islink(validator) or os.path.isfile(validator):
-        os.remove(validator)
+    hooks_dir = os.path.join(PREFIX, "hooks")
+    for name in LEFTOVER_GATES:
+        path = os.path.join(hooks_dir, name)
+        if os.path.islink(path) or os.path.isfile(path):
+            os.remove(path)
 
 
 def main():
@@ -306,8 +309,8 @@ def main():
     if PURGE and os.path.isdir(STATE_DIR):
         shutil.rmtree(STATE_DIR)
     sys.stdout.write("Uninstall complete. herdr-agent-state.sh was not modified.\n")
-    if not PURGE:
-        sys.stdout.write("State left in %s (pass --purge to delete secret/audit).\n" % STATE_DIR)
+    if not PURGE and os.path.isdir(STATE_DIR):
+        sys.stdout.write("Leftover lock state in %s (pass --purge to delete).\n" % STATE_DIR)
 
 
 if __name__ == "__main__":

@@ -1,9 +1,0 @@
-{
-  "hook_event_name": "PreToolUse",
-  "tool_name": "mcp__github__create_issue",
-  "session_id": "test-session-1",
-  "prompt_id": "prompt-1",
-  "tool_input": {
-    "title": "x"
-  }
-}

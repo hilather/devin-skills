@@ -59,7 +59,7 @@ Include `## Key Decisions`. Summarize the most important architectural and desig
 
 ## Mandatory: PR Plan
 
-Include `## PR Plan` at the bottom. Break the design into concrete, ordered pull requests. Each PR must be independently reviewable and mergeable. Use this shape so a later execute path can parse it:
+Include `## PR Plan` at the bottom. Break the design into concrete, ordered pull requests. Each PR must be independently reviewable and mergeable. Use this shape so an engineer can take one slice at a time through Devin's builtin `/plan`:
 
 ```
 ## PR Plan
@@ -98,4 +98,3 @@ If the task asks for only one of those, still return complete file(s) with the s
 - Keep language precise and technical, not vague or hand-wavy
 - Write for an audience of senior engineers who know the codebase
 - Do not name a skill `plan`; Devin's builtin `/plan` is the read-only planner
-- Do not reinvent `/goal`: the gate-enforced skill exists (`skills/goal`); a prompt-only imitation is forbidden

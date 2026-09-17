@@ -13,7 +13,9 @@ You are an **inline** orchestrator (this skill omits `subagent` and `allowed-too
 
 You coordinate only. You **must not** author the design-document body or invent review findings. **All** document prose comes from `design-writer`. **All** review notes come from `design-reviewer`. You are the **only writer on disk**: those profiles have no `write` / `edit` / `exec`. You copy their fenced markdown onto files under `design_allow_root`.
 
-Do **not** spawn `subagent_general`. Do **not** give writer/reviewer write tools. Do **not** wait for a child-hooks-reenter spike (user 2026-09-13; Key Decision 19). Child `write` is not assumed to re-enter hooks; that is why these profiles are read-only.
+Do **not** spawn `subagent_general`. Do **not** give writer/reviewer write tools.
+
+This skill writes a spec. It does **not** implement. After it finishes, use Devin's builtin `/plan` for implementation planning. Do not create a skill named `plan`.
 
 ## Honest gaps (Devin ≠ Grok)
 
@@ -21,8 +23,6 @@ Do **not** spawn `subagent_general`. Do **not** give writer/reviewer write tools
 - There is **no** Grok `resume_from` host object. Use `run_subagent.resume` with the agent id from the previous result. If `resume` fails, launch a **fresh** `design-writer` / `design-reviewer` and paste the files that are already on disk (the disk is the memory).
 - You see a distilled subagent result, not the raw transcript. The task must demand a **complete** fenced file; `resume` if truncated.
 - Nested `subagent: true` skills run **inline** inside a subagent. This orchestrator must run on the **parent** (depth 0). Do not re-invoke `/design` from inside a subagent (`run_subagent` is disabled there).
-- `exec rm` is not on the locked allowlist. Leave summary/review in the cache root; do not try to delete them while writes are locked.
-- Do not `read` the gate script or `current_session` (protected). Invoke `allow-design` with `python3 ~/.config/devin/hooks/devin-gates.py allow-design` (tilde, not `$HOME`). If that fails, retry the repo `hooks/devin-gates.py` path.
 
 ## Tool-call discipline
 
@@ -52,37 +52,33 @@ Exit the loop when `rereview-round-N` (or first review) has 0 open issues.
 
 ## Setup
 
-1. Run `allow-design` with **no** `--file`, no `$HOME`, no `$STATE_DIR`. Do **not** `read` / `grep` / `find_file_by_name` / `ls` the gate script or `current_session` (protected paths, blocked even after unlock). Do not probe whether the file exists. The CLI resolves session id itself (`DEVIN_SESSION_ID` / `--session-id` / `current_session`). Do not invent a session id. Optional `--id` is 8 lowercase hex only; omit to generate.
+1. Create the artifact directory:
 
 ```
-python3 ~/.config/devin/hooks/devin-gates.py allow-design
+python3 <absolute dirname of this SKILL.md>/scripts/setup-design.py
 ```
 
-Use a literal tilde (`~/.config/...`), not `$HOME` — locked `exec` treats `$` as a metachar and will deny the command.
+Optional `--id` is 8 lowercase hex only; omit to generate.
 
-2. If that `exec` fails, retry the repo copy (allowlisted via `source_realpath` after install). Still no existence probe — just invoke:
+2. Parse stdout lines `design_id=...` and `design_allow_root=...`. If the command fails or `design_allow_root` is empty, print stderr and **stop**. Spawn of `design-writer` / `design-reviewer` is **blocked** until this root is set.
 
-```
-python3 <absolute dirname of this SKILL.md>/../../hooks/devin-gates.py allow-design
-```
+3. `request_scope` the printed `design_allow_root` directory. Devin's workspace sandbox will otherwise refuse parent `write`/`read` of `$XDG_CACHE_HOME/devin-skills/design/<id>/` (default `~/.cache/...`). Compaction and the resume-fallback ("disk is the memory") need parent `read` of those files. Keep pasting file bodies into child `task` prompts — children still may not `read` the cache.
 
-3. Parse stdout lines `design_id=...` and `design_allow_root=...`. If both commands fail or `design_allow_root` is empty, print stderr and **stop**. Spawn of `design-writer` / `design-reviewer` is **blocked** until this root is set.
-
-4. `request_scope` the printed `design_allow_root` directory (hook-allowlisted; not a protected path). Devin's workspace sandbox is separate from the gate: without this, parent `write`/`read` of `$XDG_CACHE_HOME/devin-skills/design/<id>/` (default `~/.cache/...`) can be refused as out-of-workspace and the loop dies while still locked. Compaction and the resume-fallback ("disk is the memory") need parent `read` of those files. Keep pasting file bodies into child `task` prompts — children still may not `read` the cache.
-
-5. Define paths (thread these for the whole loop; never regenerate):
+4. Define paths (thread these for the whole loop; never regenerate):
    - `design_doc_file`: `<design_allow_root>/design-doc.md`
    - `summary_file`: `<design_allow_root>/summary.md`
    - `review_file`: `<design_allow_root>/review.md`
    - scratch `state.json`: `<design_allow_root>/state.json`
-6. Parent `write` / `edit` **only** succeed under `design_allow_root` (realpath). Workspace source stays locked. Do not symlink out of that root.
-7. After `request_scope`, `write` scratch `state.json` (not the HMAC session blob) under that root:
+
+5. After `request_scope`, `write` scratch `state.json` under that root:
 
 ```
 {"round_count": 0, "writer_id": "", "reviewer_id": "", "design_id": "<id>", "design_allow_root": "<root>", "design_doc_file": "...", "summary_file": "...", "review_file": "..."}
 ```
 
 Also keep in working memory: `total_issues_by_severity` (cumulative map) and `previous_review_snapshot` (prior review text for stalemate detection). Persist them in scratch `state.json` when you can.
+
+Do not symlink out of `design_allow_root`.
 
 ## Copying fenced markdown (parent only)
 
@@ -95,8 +91,8 @@ After each subagent result:
 3. Do not rephrase, trim required sections, or splice diffs into the doc. Paste what the subagent emitted.
 4. If a required block is missing or truncated, `resume` that agent and ask for the complete file(s) again. Do not ship a partial doc.
 
-First draft (writer) → **two** blocks, in order: design doc, then summary.  
-Revision (writer) → **two** blocks: full updated design doc, then complete updated review notes.  
+First draft (writer) → **two** blocks, in order: design doc, then summary.
+Revision (writer) → **two** blocks: full updated design doc, then complete updated review notes.
 Reviewer → **one** block: complete review notes.
 
 ## `run_subagent` contract
@@ -259,7 +255,7 @@ Read the final `design_doc_file`.
 2. Extract **Open Questions** (if any remain). Ask the user; do not silently resolve. If they answer, `resume` the writer once to incorporate, then **skip** re-review (user decisions, not design issues).
 3. Extract **PR Plan** and present it.
 
-Keep `design_doc_file`. Leave `summary_file` / `review_file` in the cache root (do not `rm` while locked).
+Keep `design_doc_file`. Leave `summary_file` / `review_file` in the cache root.
 
 ## Final report
 
@@ -269,6 +265,8 @@ Keep `design_doc_file`. Leave `summary_file` / `review_file` in the cache root (
 4. Total issues addressed (`total_issues_by_severity`)
 5. PR Plan
 6. Open questions (resolved answers, or none)
+
+Then stop using `/design`. Hand each `### PR N:` to Devin's builtin `/plan` (then implement) yourself.
 
 ## In-progress reporting
 
@@ -281,14 +279,14 @@ Keep `design_doc_file`. Leave `summary_file` / `review_file` in the cache root (
 ## Rules
 
 - **Parent is the only writer.** Copy fences; never self-author the doc body.
-- **`allow-design` first.** `python3 ~/.config/devin/hooks/devin-gates.py allow-design` (no `--file`, no `$HOME`, no `$STATE_DIR`). Do not `read` the gate or `current_session`. On exec failure, retry the repo `hooks/devin-gates.py` path. Then `request_scope` the printed `design_allow_root` before writing artifacts.
+- **Setup script first.** `python3 <dirname of this SKILL.md>/scripts/setup-design.py`. Then `request_scope` the printed `design_allow_root` before writing artifacts.
 - **`resume` for revise / re-review.** If resume fails, fresh spawn + files on disk.
 - **No Grok `spawn_subagent` / `resume_from`.** `run_subagent` only.
-- **No child `write`.** Do not wait on a child-hooks-reenter spike.
+- **No child `write`.** Writer and reviewer are read-only.
 - **Outer fences are four-or-more backticks** so inner Mermaid/code can nest.
 - **Mandatory `## PR Plan` and `## Key Decisions`.**
 - **Loop until 0 open.** No max-rounds cap. Nits count.
 - **Escalate, don't spin.** wontfix re-opened twice, or `needs-user-input` → ask the user. User decisions are final.
 - **Foreground only** (`is_background: false`).
-- **Do not name a skill `plan`.** Do not reinvent `/goal` — the gate-enforced skill exists; a prompt-only imitation is forbidden.
+- **Do not name a skill `plan`.** Builtin `/plan` is the implementation planner. This skill does not implement.
 - **Error handling:** subagent failure → report and stop. Do not continue with missing artifacts.

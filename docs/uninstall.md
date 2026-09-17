@@ -1,12 +1,12 @@
 # Uninstall
 
-Removes Devin Skills hook entries, the copied gate, our skill/agent symlinks, and the `AGENTS.md` span. It **never** touches `herdr-agent-state.sh` or herdr command strings.
+Removes our skill/agent symlinks, the `AGENTS.md` span, leftover gate files, and leftover `devin-gates.py` hook entries. It **never** touches `herdr-agent-state.sh` or herdr command strings.
 
 ```sh
 sh uninstall.sh
 ```
 
-Also drop the secret, audit log, and session state:
+Also drop leftover lock state (secret, audit log) from an older install:
 
 ```sh
 sh uninstall.sh --purge
@@ -14,12 +14,11 @@ sh uninstall.sh --purge
 
 ## What it does
 
-1. Drops only `config.json` hook elements whose `command` contains `devin-gates.py`.
-2. Deletes an event key if its array is then empty — any event the install created goes away (`PostCompaction` / `SessionEnd` with herdr present; all seven on a fresh config). herdr's events stay.
-3. Removes the `<!-- devin-skills:begin -->` … `<!-- devin-skills:end -->` span from `$PREFIX/AGENTS.md`. Other content is kept. The file is deleted only if nothing remains.
-4. Removes `$PREFIX/hooks/devin-gates.py` and `$PREFIX/hooks/devin_gates_goal.py` (the copied files or a leftover symlink). Does not follow a symlink into this git repo and delete the source.
-5. Unlinks `$PREFIX/skills/<name>` and `$PREFIX/agents/<name>.md` only when they are symlinks to this repo. Real files are left alone.
-6. `--purge` deletes the state directory (secret, `install-hash`, `source_realpath`, `audit.jsonl`, `current_session`, sessions, `goals/`). Without `--purge`, state is left in place so a reinstall can reuse the same secret.
+1. Drops `config.json` hook elements whose `command` contains `devin-gates.py` (no-op if none remain).
+2. Removes the `<!-- devin-skills:begin -->` … `<!-- devin-skills:end -->` span from `$PREFIX/AGENTS.md`. Other content is kept. The file is deleted only if nothing remains.
+3. Removes leftover `$PREFIX/hooks/devin-gates.py` (and old goal/execute-plan copies) if present. Does not follow a symlink into this git repo and delete the source.
+4. Unlinks `$PREFIX/skills/<name>` and `$PREFIX/agents/<name>.md` when they are symlinks to this repo. Real files are left alone.
+5. `--purge` deletes the leftover state directory from the old lock. Without `--purge`, that directory is left in place if it still exists.
 
 A second uninstall is a no-op success.
 
@@ -29,13 +28,11 @@ A second uninstall is a no-op success.
 | --- | --- |
 | `--prefix DIR` | Same as install (default `~/.config/devin`) |
 | `--src DIR` | Repo root used to recognize our skill/agent symlinks |
-| `--project` | Also strip gate entries from `.devin/hooks.v1.json` in the current directory |
-| `--purge` | Delete the state directory |
+| `--project` | Also unlink `.devin/` skills/agents and strip leftover `.devin/hooks.v1.json` gate entries |
+| `--purge` | Delete leftover lock state under `$XDG_DATA_HOME/devin-skills` (or `~/.local/share/devin-skills`) |
 | `--help` | Usage |
 
-State directory resolution matches [install.md](install.md#state-directory).
-
-## If merge went wrong
+## If a leftover-lock backup exists
 
 Restore the timestamped backup instead of editing by hand:
 
@@ -43,4 +40,4 @@ Restore the timestamped backup instead of editing by hand:
 cp ~/.config/devin/config.json.bak-devin-skills-<timestamp> ~/.config/devin/config.json
 ```
 
-Uninstall does not restore that backup automatically and does not delete backups.
+Uninstall does not restore that backup automatically and does not delete backups. Those backups were created when the lock was **installed**; restoring one would put the lock back.

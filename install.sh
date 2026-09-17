@@ -1,5 +1,5 @@
 #!/bin/sh
-# User-level install: copy the gate, merge one dispatcher per event beside herdr.
+# User-level install: symlink skills/agents, merge AGENTS.md, strip leftover gate hooks.
 set -eu
 
 usage() {
@@ -9,8 +9,11 @@ Usage: sh install.sh [--prefix DIR] [--src DIR] [--force] [--project] [--help]
   --prefix DIR   Install root (default: $HOME/.config/devin)
   --src DIR      Repo root (default: directory of this script)
   --force        Replace a non-symlink skill/agent destination
-  --project      Write .devin/hooks.v1.json (gate only); skip user config merge
+  --project      Also symlink skills/agents under .devin/ in the current directory
   --help         Show this help
+
+Re-running this installer removes leftover devin-gates.py hook entries from
+config.json (and from .devin/hooks.v1.json with --project).
 EOF
 }
 
@@ -64,64 +67,18 @@ if [ -z "$PREFIX" ]; then
   PREFIX=$HOME/.config/devin
 fi
 
-if [ -n "${DEVIN_SKILLS_STATE_DIR:-}" ]; then
-  STATE_DIR=$DEVIN_SKILLS_STATE_DIR
-elif [ -n "${XDG_DATA_HOME:-}" ]; then
-  STATE_DIR=$XDG_DATA_HOME/devin-skills
-else
-  STATE_DIR=$HOME/.local/share/devin-skills
-fi
-
 command -v python3 >/dev/null 2>&1 || {
   echo "install.sh: python3 is required" >&2
   exit 1
 }
 
-[ -f "$SRC/hooks/devin-gates.py" ] || {
-  echo "install.sh: missing $SRC/hooks/devin-gates.py" >&2
+[ -d "$SRC/skills" ] || {
+  echo "install.sh: missing $SRC/skills" >&2
   exit 1
 }
-[ -f "$SRC/hooks/hook-entries.json" ] || {
-  echo "install.sh: missing $SRC/hooks/hook-entries.json" >&2
-  exit 1
-}
-
-# Splice repo-source patches (e.g. the goal module) into the gate source
-# before copying. Runs in the installer's shell, so the gate's protected-path
-# rules do not apply; the repo copy stays canonical for tests and review.
-if [ -f "$SRC/hooks/apply_goal_patch.py" ]; then
-  python3 "$SRC/hooks/apply_goal_patch.py" "$SRC/hooks/devin-gates.py" || exit 1
-fi
-if [ -f "$SRC/hooks/apply_execplan_patch.py" ]; then
-  python3 "$SRC/hooks/apply_execplan_patch.py" "$SRC/hooks/devin-gates.py" || exit 1
-fi
-
-mkdir -p "$PREFIX/skills" "$PREFIX/agents" "$PREFIX/hooks"
-mkdir -p "$STATE_DIR"
-chmod 700 "$STATE_DIR" 2>/dev/null || true
-
-INSTALLED_GATE=$PREFIX/hooks/devin-gates.py
-# Drop a dest symlink or hardlink first; cp would otherwise write through into the repo.
-rm -f "$INSTALLED_GATE"
-cp "$SRC/hooks/devin-gates.py" "$INSTALLED_GATE"
-if [ -f "$SRC/hooks/devin_gates_goal.py" ]; then
-  rm -f "$PREFIX/hooks/devin_gates_goal.py"
-  cp "$SRC/hooks/devin_gates_goal.py" "$PREFIX/hooks/devin_gates_goal.py"
-fi
-if [ -f "$SRC/hooks/devin_gates_execplan.py" ]; then
-  rm -f "$PREFIX/hooks/devin_gates_execplan.py"
-  cp "$SRC/hooks/devin_gates_execplan.py" "$PREFIX/hooks/devin_gates_execplan.py"
-fi
-if [ -f "$SRC/skills/execute-plan/scripts/validate-plan.py" ]; then
-  rm -f "$PREFIX/hooks/devin_execplan_validate_plan.py"
-  cp "$SRC/skills/execute-plan/scripts/validate-plan.py" \
-     "$PREFIX/hooks/devin_execplan_validate_plan.py"
-fi
 
 export DEVIN_SKILLS_INSTALL_PREFIX="$PREFIX"
 export DEVIN_SKILLS_INSTALL_SRC="$SRC"
-export DEVIN_SKILLS_INSTALL_STATE_DIR="$STATE_DIR"
-export DEVIN_SKILLS_INSTALL_GATE="$INSTALLED_GATE"
 export DEVIN_SKILLS_INSTALL_FORCE="$FORCE"
 export DEVIN_SKILLS_INSTALL_PROJECT="$PROJECT"
 export DEVIN_SKILLS_INSTALL_PROJECT_DIR="${DEVIN_SKILLS_PROJECT_DIR:-$(pwd)}"
@@ -129,8 +86,6 @@ export DEVIN_SKILLS_INSTALL_PROJECT_DIR="${DEVIN_SKILLS_PROJECT_DIR:-$(pwd)}"
 python3 - <<'INSTALL_PY'
 from __future__ import annotations
 
-import copy
-import hashlib
 import json
 import os
 import shutil
@@ -140,14 +95,17 @@ import time
 
 PREFIX = os.path.realpath(os.environ["DEVIN_SKILLS_INSTALL_PREFIX"])
 SRC = os.path.realpath(os.environ["DEVIN_SKILLS_INSTALL_SRC"])
-STATE_DIR = os.path.realpath(os.environ["DEVIN_SKILLS_INSTALL_STATE_DIR"])
-INSTALLED = os.path.realpath(os.environ["DEVIN_SKILLS_INSTALL_GATE"])
 FORCE = os.environ.get("DEVIN_SKILLS_INSTALL_FORCE") == "1"
 PROJECT = os.environ.get("DEVIN_SKILLS_INSTALL_PROJECT") == "1"
 PROJECT_DIR = os.path.realpath(os.environ.get("DEVIN_SKILLS_INSTALL_PROJECT_DIR") or os.getcwd())
 BEGIN = "<!-- devin-skills:begin -->"
 END = "<!-- devin-skills:end -->"
-SKIP_EVENTS = {"PermissionRequest"}
+LEFTOVER_GATES = (
+    "devin-gates.py",
+    "devin_gates_goal.py",
+    "devin_gates_execplan.py",
+    "devin_execplan_validate_plan.py",
+)
 
 
 def fail(msg):
@@ -189,10 +147,10 @@ def atomic_write_regular(path, data, mode):
     os.chmod(path, mode)
 
 
-def write_mode(path, data, mode):
-    if os.path.islink(path):
-        os.remove(path)
-    atomic_write_regular(path, data, mode)
+def dump_json(path, obj):
+    mode = existing_mode(path, 0o600)
+    payload = json.dumps(obj, indent=2, ensure_ascii=False) + "\n"
+    atomic_write_regular(path, payload, mode)
 
 
 def iter_commands(obj):
@@ -213,55 +171,85 @@ def has_gates_command(obj):
     return any("devin-gates.py" in cmd for cmd in iter_commands(obj))
 
 
-def shell_single_quote(path):
-    return "'" + path.replace("'", "'\\''") + "'"
-
-
-def rewrite_gate_element(element, installed):
-    el = copy.deepcopy(element)
-    new_cmd = "python3 %s hook" % shell_single_quote(installed)
-
-    def walk(obj):
-        if isinstance(obj, dict):
-            cmd = obj.get("command")
-            if isinstance(cmd, str) and "devin-gates.py" in cmd:
-                obj["command"] = new_cmd
-            for val in obj.values():
-                walk(val)
-        elif isinstance(obj, list):
-            for val in obj:
-                walk(val)
-
-    walk(el)
-    return el
-
-
-def merge_hooks_obj(hooks, entries, installed):
+def unmerge_hooks_obj(hooks):
     if not isinstance(hooks, dict):
-        hooks = {}
-    for event, elements in entries.items():
-        if event in SKIP_EVENTS:
+        return hooks, False
+    changed = False
+    for event in list(hooks.keys()):
+        val = hooks[event]
+        if not isinstance(val, list):
             continue
-        if not isinstance(elements, list):
+        kept = [el for el in val if not has_gates_command(el)]
+        if len(kept) == len(val):
             continue
-        rewritten = [rewrite_gate_element(el, installed) for el in elements]
-        existing = hooks.get(event)
-        if not existing:
-            hooks[event] = rewritten
-        elif has_gates_command(existing):
-            continue
+        changed = True
+        if kept:
+            hooks[event] = kept
         else:
-            if not isinstance(existing, list):
-                existing = [existing]
-                hooks[event] = existing
-            existing.extend(rewritten)
-    return hooks
+            del hooks[event]
+    return hooks, changed
 
 
-def dump_json(path, obj):
-    mode = existing_mode(path, 0o600)
-    payload = json.dumps(obj, indent=2, ensure_ascii=False) + "\n"
-    atomic_write_regular(path, payload, mode)
+def backup_config(config_path):
+    ts = time.strftime("%Y%m%d%H%M%S")
+    bak = os.path.join(os.path.dirname(config_path), "config.json.bak-devin-skills-%s" % ts)
+    if os.path.exists(bak):
+        bak = "%s-%s" % (bak, os.getpid())
+    shutil.copy2(config_path, bak)
+    sys.stdout.write("Backup: %s\n" % bak)
+
+
+def strip_user_config_gates():
+    config_path = os.path.join(PREFIX, "config.json")
+    if not os.path.isfile(config_path):
+        return
+    with open(config_path, "r", encoding="utf-8") as fh:
+        try:
+            cfg = json.load(fh)
+        except json.JSONDecodeError as exc:
+            fail("cannot parse %s: %s" % (config_path, exc))
+    if not isinstance(cfg, dict):
+        fail("%s is not a JSON object" % config_path)
+    hooks = cfg.get("hooks")
+    if not isinstance(hooks, dict):
+        return
+    cfg["hooks"], changed = unmerge_hooks_obj(hooks)
+    if not changed:
+        return
+    backup_config(config_path)
+    dump_json(config_path, cfg)
+    sys.stdout.write("Removed leftover gate hooks from %s\n" % config_path)
+
+
+def strip_project_hooks():
+    path = os.path.join(PROJECT_DIR, ".devin", "hooks.v1.json")
+    if not os.path.isfile(path):
+        return
+    with open(path, "r", encoding="utf-8") as fh:
+        try:
+            hooks = json.load(fh)
+        except json.JSONDecodeError as exc:
+            fail("cannot parse %s: %s" % (path, exc))
+    if not isinstance(hooks, dict):
+        return
+    hooks, changed = unmerge_hooks_obj(hooks)
+    if not changed:
+        return
+    if not hooks:
+        os.remove(path)
+        sys.stdout.write("Removed leftover project gate file: %s\n" % path)
+    else:
+        dump_json(path, hooks)
+        sys.stdout.write("Removed leftover gate hooks from %s\n" % path)
+
+
+def remove_copied_gate():
+    hooks_dir = os.path.join(PREFIX, "hooks")
+    for name in LEFTOVER_GATES:
+        path = os.path.join(hooks_dir, name)
+        if os.path.islink(path) or os.path.isfile(path):
+            os.remove(path)
+            sys.stdout.write("Removed leftover %s\n" % path)
 
 
 def ensure_symlink(src, dest):
@@ -281,29 +269,55 @@ def ensure_symlink(src, dest):
     os.symlink(src, dest)
 
 
+def is_our_symlink(dest, src):
+    if not os.path.islink(dest):
+        return False
+    target = os.readlink(dest)
+    src_abs = os.path.abspath(src)
+    src_real = os.path.realpath(src) if os.path.lexists(src) else src_abs
+    dest_real = os.path.realpath(dest) if os.path.lexists(dest) else ""
+    return os.path.normpath(target) in (src_abs, src_real) or dest_real == src_real
+
+
+def prune_stale_symlinks(dest_root):
+    for kind in ("skills", "agents"):
+        dest_dir = os.path.join(dest_root, kind)
+        src_dir = os.path.join(SRC, kind)
+        if not os.path.isdir(dest_dir):
+            continue
+        for name in os.listdir(dest_dir):
+            dest = os.path.join(dest_dir, name)
+            src = os.path.join(src_dir, name)
+            if not os.path.islink(dest):
+                continue
+            if os.path.lexists(src):
+                continue
+            if is_our_symlink(dest, src) or SRC in os.path.normpath(os.readlink(dest)):
+                os.remove(dest)
+
+
 def link_skills_agents(dest_root):
+    os.makedirs(os.path.join(dest_root, "skills"), exist_ok=True)
+    os.makedirs(os.path.join(dest_root, "agents"), exist_ok=True)
     skills_src = os.path.join(SRC, "skills")
     agents_src = os.path.join(SRC, "agents")
     if os.path.isdir(skills_src):
-        dest_skills = os.path.join(dest_root, "skills")
-        os.makedirs(dest_skills, exist_ok=True)
         for name in sorted(os.listdir(skills_src)):
             if name.startswith("."):
                 continue
             src = os.path.join(skills_src, name)
             if not os.path.isdir(src):
                 continue
-            ensure_symlink(src, os.path.join(dest_skills, name))
+            ensure_symlink(src, os.path.join(dest_root, "skills", name))
     if os.path.isdir(agents_src):
-        dest_agents = os.path.join(dest_root, "agents")
-        os.makedirs(dest_agents, exist_ok=True)
         for name in sorted(os.listdir(agents_src)):
             if name.startswith(".") or not name.endswith(".md"):
                 continue
             src = os.path.join(agents_src, name)
             if not os.path.isfile(src):
                 continue
-            ensure_symlink(src, os.path.join(dest_agents, name))
+            ensure_symlink(src, os.path.join(dest_root, "agents", name))
+    prune_stale_symlinks(dest_root)
 
 
 def wrap_agents(content):
@@ -342,110 +356,24 @@ def merge_agents_md(dest_path, content):
     atomic_write_regular(dest_path, text, mode)
 
 
-def ensure_secret():
-    os.makedirs(STATE_DIR, mode=0o700, exist_ok=True)
-    try:
-        os.chmod(STATE_DIR, 0o700)
-    except OSError:
-        pass
-    path = os.path.join(STATE_DIR, "secret")
-    if os.path.exists(path):
-        return
-    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-    try:
-        os.write(fd, os.urandom(32))
-    finally:
-        os.close(fd)
-    os.chmod(path, 0o600)
-
-
-def write_hash_and_source():
-    if not os.path.isfile(INSTALLED):
-        fail("installed gate missing: %s" % INSTALLED)
-    with open(INSTALLED, "rb") as fh:
-        digest = hashlib.sha256(fh.read()).hexdigest()
-    write_mode(os.path.join(STATE_DIR, "install-hash"), digest + "\n", 0o600)
-    source = os.path.realpath(os.path.join(SRC, "hooks", "devin-gates.py"))
-    write_mode(os.path.join(STATE_DIR, "source_realpath"), source + "\n", 0o600)
-
-
-def backup_and_merge_user_config(entries):
-    config_path = os.path.join(PREFIX, "config.json")
-    if os.path.isfile(config_path):
-        ts = time.strftime("%Y%m%d%H%M%S")
-        bak = os.path.join(PREFIX, "config.json.bak-devin-skills-%s" % ts)
-        if os.path.exists(bak):
-            bak = "%s-%s" % (bak, os.getpid())
-        shutil.copy2(config_path, bak)
-        sys.stdout.write("Backup: %s\n" % bak)
-        with open(config_path, "r", encoding="utf-8") as fh:
-            try:
-                cfg = json.load(fh)
-            except json.JSONDecodeError as exc:
-                fail("cannot parse %s: %s" % (config_path, exc))
-        if not isinstance(cfg, dict):
-            fail("%s is not a JSON object" % config_path)
-    else:
-        cfg = {}
-    hooks = cfg.get("hooks")
-    if hooks is None:
-        hooks = {}
-        cfg["hooks"] = hooks
-    cfg["hooks"] = merge_hooks_obj(hooks, entries, INSTALLED)
-    dump_json(config_path, cfg)
-
-
-def merge_project_hooks(entries):
-    dest_root = os.path.join(PROJECT_DIR, ".devin")
-    os.makedirs(dest_root, exist_ok=True)
-    path = os.path.join(dest_root, "hooks.v1.json")
-    if os.path.isfile(path):
-        with open(path, "r", encoding="utf-8") as fh:
-            try:
-                hooks = json.load(fh)
-            except json.JSONDecodeError as exc:
-                fail("cannot parse %s: %s" % (path, exc))
-        if not isinstance(hooks, dict):
-            fail("%s is not a JSON object" % path)
-    else:
-        hooks = {}
-    dump_json(path, merge_hooks_obj(hooks, entries, INSTALLED))
-    link_skills_agents(dest_root)
-
-
 def main():
-    gate_path = os.environ["DEVIN_SKILLS_INSTALL_GATE"]
-    if os.path.islink(gate_path) or not os.path.isfile(INSTALLED):
-        fail("gate must be a regular file copy at %s" % gate_path)
-    src_gate = os.path.join(SRC, "hooks", "devin-gates.py")
-    inst_st = os.stat(INSTALLED)
-    src_st = os.stat(src_gate)
-    if (inst_st.st_ino, inst_st.st_dev) == (src_st.st_ino, src_st.st_dev):
-        fail("installed gate shares an inode with the source")
-
-    entries_path = os.path.join(SRC, "hooks", "hook-entries.json")
-    with open(entries_path, "r", encoding="utf-8") as fh:
-        entries = json.load(fh)
-    if not isinstance(entries, dict):
-        fail("hook-entries.json must be an object")
-
-    ensure_secret()
-    write_hash_and_source()
-
+    os.makedirs(os.path.join(PREFIX, "skills"), exist_ok=True)
+    os.makedirs(os.path.join(PREFIX, "agents"), exist_ok=True)
+    strip_user_config_gates()
+    remove_copied_gate()
+    link_skills_agents(PREFIX)
+    rules = os.path.join(SRC, "rules", "AGENTS.md")
+    if os.path.isfile(rules):
+        with open(rules, "r", encoding="utf-8") as fh:
+            merge_agents_md(os.path.join(PREFIX, "AGENTS.md"), fh.read())
     if PROJECT:
-        merge_project_hooks(entries)
-    else:
-        link_skills_agents(PREFIX)
-        backup_and_merge_user_config(entries)
-        rules = os.path.join(SRC, "rules", "AGENTS.md")
-        if os.path.isfile(rules):
-            with open(rules, "r", encoding="utf-8") as fh:
-                merge_agents_md(os.path.join(PREFIX, "AGENTS.md"), fh.read())
-
-    sys.stdout.write("Copied gate: %s\n" % INSTALLED)
-    sys.stdout.write("State dir: %s\n" % STATE_DIR)
-    sys.stdout.write("In Devin, run /hooks to confirm herdr and devin-gates.py both appear.\n")
-    sys.stdout.write("Tests: python3 -m unittest tests.test_install_merge tests.test_gate -v\n")
+        dest_root = os.path.join(PROJECT_DIR, ".devin")
+        os.makedirs(dest_root, exist_ok=True)
+        strip_project_hooks()
+        link_skills_agents(dest_root)
+    sys.stdout.write("Installed skills/agents under %s\n" % PREFIX)
+    sys.stdout.write("Commands: /design  (Devin's builtin /plan is unchanged)\n")
+    sys.stdout.write("Tests: python3 -m unittest tests.test_install_merge -v\n")
 
 
 if __name__ == "__main__":

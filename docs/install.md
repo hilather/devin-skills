@@ -1,6 +1,8 @@
 # Install
 
-Installs the write-lock **beside** whatever is already in your Devin config. It never replaces `config.json` wholesale and never edits `herdr-agent-state.sh`.
+Installs `/design` (and the writer/reviewer agents) into your Devin config. It never replaces `config.json` wholesale and never edits `herdr-agent-state.sh`.
+
+If an older version of this repo installed a write-lock, this installer **removes** those `devin-gates.py` hook entries.
 
 ## Prerequisites
 
@@ -24,87 +26,43 @@ sh install.sh --prefix ~/.config/devin --src /path/to/devin-skills
 
 Default prefix is `$HOME/.config/devin` (not `XDG_CONFIG_HOME`).
 
-After it finishes, start Devin and run:
-
-```
-/hooks
-```
-
-You should see `devin-gates.py`. If you already used herdr, you should still see `herdr-agent-state.sh` as well.
-
 ## What it does
 
-In plain English:
+1. Creates `~/.config/devin/{skills,agents}` if needed.
+2. **Symlinks** each skill and agent into `~/.config/devin/` so slash commands are `/design`, not `/devin-skills:design`. Refuses to clobber a real file unless you pass `--force`.
+3. **Prunes** stale skill/agent symlinks that used to point at this repo (skeptics, `/goal`, `/execute-plan`, gate commands).
+4. Merges [rules/AGENTS.md](../rules/AGENTS.md) into `~/.config/devin/AGENTS.md` inside `<!-- devin-skills:begin -->` … `<!-- devin-skills:end -->`.
+5. If `config.json` still has `devin-gates.py` hook entries: backs it up to `config.json.bak-devin-skills-<timestamp>`, then drops those entries. herdr command strings stay byte-identical. Empty events created only for the old lock (`PostCompaction` / `SessionEnd` with herdr present) go away.
+6. Deletes leftover copies of `devin-gates.py` (and the old goal/execute-plan splices) under `$PREFIX/hooks/`.
 
-1. Creates `~/.config/devin/{skills,agents,hooks}` and a private state directory (mode `0700`).
-2. Generates a random HMAC secret once (`os.urandom` 32 bytes, mode `0600`). Reinstall does not rotate it.
-3. **Splices** the goal and execute-plan features into the repo copy of `devin-gates.py` by running `hooks/apply_goal_patch.py` and `hooks/apply_execplan_patch.py` when present (idempotent; the repo copy stays canonical), then **copies** `hooks/devin-gates.py` — and `hooks/devin_gates_goal.py`, `hooks/devin_gates_execplan.py`, and the execute-plan validator (as `hooks/devin_execplan_validate_plan.py`) when present — into `~/.config/devin/hooks/`. A symlink back to this repo would let a later edit of the lock file bypass itself.
-4. Records an install hash and the real path it copied from.
-5. **Symlinks** each skill and agent into `~/.config/devin/` so slash commands are `/design`, not `/devin-skills:design`. Refuses to clobber a real file unless you pass `--force`.
-6. Backs up `config.json` to `config.json.bak-devin-skills-<timestamp>`, then merges [hooks/hook-entries.json](../hooks/hook-entries.json):
-   - Unknown top-level keys (`agent`, `devin`, `shell`, `theme_mode`, `version`, …) stay.
-   - One gate dispatcher per event. Missing events are created — all seven on a fresh config; with herdr present, `PostCompaction` and `SessionEnd` (herdr already hooks the other five).
-   - herdr entries stay first; herdr command strings are not rewritten.
-   - `PermissionRequest` is left to herdr. The gate is not added there.
-   - The installed command path is the **copied** gate, not the repo path.
-7. Merges [rules/AGENTS.md](../rules/AGENTS.md) into `~/.config/devin/AGENTS.md` inside `<!-- devin-skills:begin -->` … `<!-- devin-skills:end -->`.
+Second install is safe to re-run.
 
-Second install is safe to re-run: no duplicate hook entries, secret unchanged, gate copy and hashes refreshed.
-
-## State directory
-
-Same rules as the gate script:
-
-1. `DEVIN_SKILLS_STATE_DIR` if set
-2. Else `$XDG_DATA_HOME/devin-skills` if `XDG_DATA_HOME` is set
-3. Else `~/.local/share/devin-skills`
+A clean herdr config is not rewritten. There is no backup unless leftover gate entries were actually removed.
 
 ## Flags
 
 | Flag | Meaning |
 | --- | --- |
 | `--prefix DIR` | Install root (default `~/.config/devin`) |
-| `--src DIR` | Repo root to copy/symlink from (default: directory of `install.sh`) |
+| `--src DIR` | Repo root to symlink from (default: directory of `install.sh`) |
 | `--force` | Replace a non-symlink skill/agent destination |
-| `--project` | Also write `.devin/hooks.v1.json` in the current directory (see below) |
+| `--project` | Also symlink skills/agents under `.devin/` in the current directory, and strip leftover `.devin/hooks.v1.json` gate entries |
 | `--help` | Usage |
+
+User-level install always runs. `--project` is extra, not instead-of.
 
 ## herdr
 
-`~/.config/devin/config.json` may already wire `herdr-agent-state.sh` on several events. Those hooks report pane/session identity and always exit 0. Replacing that file would break herdr, so this installer never does.
-
-Summary:
-
-- Backs up `config.json` first.
-- Appends **one** gate dispatcher per event if that event does not already mention `devin-gates.py`.
-- Leaves herdr command strings **byte-identical**. herdr stays first.
-- Does **not** add a gate hook on `PermissionRequest`.
-- Never edits `herdr-agent-state.sh`.
-
-Uninstall drops only `devin-gates.py` elements. herdr remains.
-
-## Project install
-
-User-level is the default so the lock applies to every repo.
-
-To also lock the current project:
-
-```sh
-sh install.sh --project
-```
-
-That writes `.devin/hooks.v1.json` (Devin project hooks format) with **gate entries only** — no herdr, no wrapping `"hooks"` object. Skills and agents are symlinked under `.devin/` when present. The gate binary and secret still live in the user prefix. User `config.json` is not merged in this mode.
+`~/.config/devin/config.json` may already wire `herdr-agent-state.sh`. This installer never edits that file and never rewrites herdr command strings. It only removes `devin-gates.py` elements if they are still there.
 
 ## After install
 
-Dogfood gate-script changes with `/gate-bypass` or `DEVIN_GATES_OFF=1` in the shell that starts `devin`, then re-run `install.sh` (copy + refresh hash). Do not edit the installed copy from a locked session.
-
-Hunt lists for the skeptics live in `vendor/agent-hints/`. If you keep a clone of the upstream hints at `~/git/agent-skills`, run `sh scripts/refresh-vendor.sh` after they update.
+In Devin you should see `/design`. `/plan` is Devin's builtin.
 
 ## Tests
 
 ```sh
-python3 -m unittest tests.test_install_merge tests.test_gate -v
+python3 -m unittest tests.test_install_merge -v
 ```
 
 `tests/test_install_merge.py` uses a temp `HOME` / XDG tree and a fixture copied from a real herdr `config.json`. It must never write the live `~/.config/devin`.

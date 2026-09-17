@@ -1,5 +1,5 @@
 {
   "name": "devin-skills",
   "version": "0.1.0",
-  "description": "Grok-style design and skeptic skills for Devin CLI. This plugin does not include the write-lock — run install.sh from the repo to actually lock writes."
+  "description": "Grok-style /design for Devin CLI, plus Devin's builtin /plan. No write-lock."
 }

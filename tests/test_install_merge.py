@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Install/uninstall merge tests. Never touch the live ~/.config/devin."""
+"""Install/uninstall tests. Never touch the live ~/.config/devin."""
 
 from __future__ import annotations
 
@@ -17,7 +17,6 @@ INSTALL_SH = os.path.join(ROOT, "install.sh")
 UNINSTALL_SH = os.path.join(ROOT, "uninstall.sh")
 FIXTURE = os.path.join(ROOT, "tests", "fixtures", "herdr-config.json")
 RULES = os.path.join(ROOT, "rules", "AGENTS.md")
-GATE_SRC = os.path.join(ROOT, "hooks", "devin-gates.py")
 
 HERDR_EVENTS = (
     "PermissionRequest",
@@ -41,7 +40,6 @@ GATE_MARK = "devin-gates.py"
 BEGIN = "<!-- devin-skills:begin -->"
 END = "<!-- devin-skills:end -->"
 
-# Absolute live paths — do not use expanduser (tests rewrite HOME).
 LIVE_CONFIG = "/home/brewerm/.config/devin/config.json"
 LIVE_HERDR = "/home/brewerm/.config/devin/herdr-agent-state.sh"
 LIVE_PREFIX = "/home/brewerm/.config/devin"
@@ -57,6 +55,12 @@ def load_json(path):
         return json.load(fh)
 
 
+def dump_json(path, obj):
+    with open(path, "w", encoding="utf-8") as fh:
+        json.dump(obj, fh, indent=2)
+        fh.write("\n")
+
+
 def commands_for_event(cfg, event):
     hooks = cfg.get("hooks") if "hooks" in cfg else cfg
     cmds = []
@@ -70,6 +74,19 @@ def commands_for_event(cfg, event):
 
 def marked(cmds, mark):
     return [c for c in cmds if mark in c]
+
+
+def gate_element(installed_path):
+    return {
+        "matcher": "",
+        "hooks": [
+            {
+                "type": "command",
+                "command": "python3 '%s' hook" % installed_path,
+                "timeout": 5,
+            }
+        ],
+    }
 
 
 class InstallMergeTest(unittest.TestCase):
@@ -156,15 +173,23 @@ class InstallMergeTest(unittest.TestCase):
     def fixture(self):
         return load_json(FIXTURE)
 
-    def make_src(self, with_skills=False):
+    def inject_gates(self):
+        cfg = self.config()
+        installed = os.path.join(self.prefix, "hooks", "devin-gates.py")
+        os.makedirs(os.path.dirname(installed), exist_ok=True)
+        with open(installed, "w", encoding="utf-8") as fh:
+            fh.write("# leftover gate\n")
+        for event in GATE_EVENTS:
+            existing = cfg["hooks"].get(event, [])
+            cfg["hooks"][event] = list(existing) + [gate_element(installed)]
+        dump_json(os.path.join(self.prefix, "config.json"), cfg)
+        os.chmod(os.path.join(self.prefix, "config.json"), 0o600)
+
+    def make_src(self, with_skills=False, extra_agent=None):
         src = os.path.join(self.tmpdir, "src")
-        os.makedirs(os.path.join(src, "hooks"), exist_ok=True)
         os.makedirs(os.path.join(src, "rules"), exist_ok=True)
-        shutil.copy(GATE_SRC, os.path.join(src, "hooks", "devin-gates.py"))
-        shutil.copy(
-            os.path.join(ROOT, "hooks", "hook-entries.json"),
-            os.path.join(src, "hooks", "hook-entries.json"),
-        )
+        os.makedirs(os.path.join(src, "skills"), exist_ok=True)
+        os.makedirs(os.path.join(src, "agents"), exist_ok=True)
         shutil.copy(RULES, os.path.join(src, "rules", "AGENTS.md"))
         if with_skills:
             os.makedirs(os.path.join(src, "skills", "design"), exist_ok=True)
@@ -174,13 +199,19 @@ class InstallMergeTest(unittest.TestCase):
                 encoding="utf-8",
             ) as fh:
                 fh.write("# design\n")
-            os.makedirs(os.path.join(src, "agents"), exist_ok=True)
             with open(
-                os.path.join(src, "agents", "plan-skeptic.md"),
+                os.path.join(src, "agents", "design-writer.md"),
                 "w",
                 encoding="utf-8",
             ) as fh:
-                fh.write("# plan-skeptic\n")
+                fh.write("# design-writer\n")
+            if extra_agent:
+                with open(
+                    os.path.join(src, "agents", extra_agent),
+                    "w",
+                    encoding="utf-8",
+                ) as fh:
+                    fh.write("# extra\n")
         return src
 
     def test_fixture_is_six_event_herdr_shape(self):
@@ -195,16 +226,17 @@ class InstallMergeTest(unittest.TestCase):
             self.assertEqual(len(herdr), 1, event)
             self.assertEqual(len(marked(commands_for_event(cfg, event), GATE_MARK)), 0)
 
-    def test_postcompaction_and_sessionend_exist_after_merge(self):
+    def test_install_does_not_add_gates(self):
         self.install()
         cfg = self.config()
-        self.assertIn("PostCompaction", cfg["hooks"])
-        self.assertIn("SessionEnd", cfg["hooks"])
-        for event in GATE_EVENTS:
-            gates = marked(commands_for_event(cfg, event), GATE_MARK)
-            self.assertEqual(len(gates), 1, event)
-            self.assertIn(os.path.join(self.prefix, "hooks", "devin-gates.py"), gates[0])
-            self.assertTrue(gates[0].endswith(" hook") or gates[0].endswith("' hook"))
+        self.assertNotIn("PostCompaction", cfg["hooks"])
+        self.assertNotIn("SessionEnd", cfg["hooks"])
+        self.assertEqual(set(cfg["hooks"].keys()), set(HERDR_EVENTS))
+        for event in HERDR_EVENTS:
+            self.assertEqual(len(marked(commands_for_event(cfg, event), GATE_MARK)), 0)
+        self.assertFalse(
+            os.path.lexists(os.path.join(self.prefix, "hooks", "devin-gates.py"))
+        )
 
     def test_herdr_command_strings_byte_identical(self):
         before = self.fixture()
@@ -216,57 +248,37 @@ class InstallMergeTest(unittest.TestCase):
             self.assertEqual(orig, now)
             self.assertEqual(len(orig), 1)
 
-    def test_second_install_does_not_duplicate(self):
-        self.install()
-        first = self.config()
-        self.install()
-        second = self.config()
-        for event in GATE_EVENTS:
-            self.assertEqual(
-                len(marked(commands_for_event(first, event), GATE_MARK)),
-                1,
-                event,
-            )
-            self.assertEqual(
-                len(marked(commands_for_event(second, event), GATE_MARK)),
-                1,
-                event,
-            )
-        for event in HERDR_EVENTS:
-            self.assertEqual(
-                marked(commands_for_event(first, event), HERDR_MARK),
-                marked(commands_for_event(second, event), HERDR_MARK),
-            )
-
-    def test_uninstall_leaves_herdr_only(self):
-        self.install()
-        self.uninstall()
+    def test_strips_leftover_gate_hooks_and_files(self):
+        self.inject_gates()
         cfg = self.config()
-        self.assertNotIn("PostCompaction", cfg["hooks"])
-        self.assertNotIn("SessionEnd", cfg["hooks"])
-        self.assertEqual(set(cfg["hooks"].keys()), set(HERDR_EVENTS))
-        before = self.fixture()
+        for event in GATE_EVENTS:
+            self.assertEqual(len(marked(commands_for_event(cfg, event), GATE_MARK)), 1)
+        self.install()
+        after = self.config()
+        self.assertNotIn("PostCompaction", after["hooks"])
+        self.assertNotIn("SessionEnd", after["hooks"])
+        self.assertEqual(set(after["hooks"].keys()), set(HERDR_EVENTS))
         for event in HERDR_EVENTS:
-            cmds = commands_for_event(cfg, event)
-            self.assertEqual(len(cmds), 1, event)
-            self.assertEqual(len(marked(cmds, GATE_MARK)), 0)
-            self.assertEqual(
-                marked(cmds, HERDR_MARK),
-                marked(commands_for_event(before, event), HERDR_MARK),
-            )
+            self.assertEqual(len(marked(commands_for_event(after, event), GATE_MARK)), 0)
+            self.assertEqual(len(marked(commands_for_event(after, event), HERDR_MARK)), 1)
         self.assertFalse(
             os.path.lexists(os.path.join(self.prefix, "hooks", "devin-gates.py"))
         )
-        self.assertTrue(os.path.isfile(self.herdr_dummy))
-        self.assertEqual(sha256_file(self.herdr_dummy), self.herdr_dummy_hash)
-        self.assertTrue(os.path.isdir(self.state_dir))
+        backups = [
+            name
+            for name in os.listdir(self.prefix)
+            if name.startswith("config.json.bak-devin-skills-")
+        ]
+        self.assertEqual(len(backups), 1)
 
-    def test_permission_request_has_no_gate(self):
+    def test_no_backup_when_config_unchanged(self):
         self.install()
-        cfg = self.config()
-        cmds = commands_for_event(cfg, "PermissionRequest")
-        self.assertEqual(len(marked(cmds, GATE_MARK)), 0)
-        self.assertEqual(len(marked(cmds, HERDR_MARK)), 1)
+        backups = [
+            name
+            for name in os.listdir(self.prefix)
+            if name.startswith("config.json.bak-devin-skills-")
+        ]
+        self.assertEqual(backups, [])
 
     def test_unknown_keys_preserved(self):
         self.install()
@@ -278,101 +290,21 @@ class InstallMergeTest(unittest.TestCase):
         self.assertEqual(cfg["theme_mode"], orig["theme_mode"])
         self.assertEqual(cfg["version"], orig["version"])
 
-    def test_backup_created(self):
-        self.install()
-        backups = [
-            name
-            for name in os.listdir(self.prefix)
-            if name.startswith("config.json.bak-devin-skills-")
-        ]
-        self.assertEqual(len(backups), 1)
-        bak = load_json(os.path.join(self.prefix, backups[0]))
-        self.assertEqual(set(bak["hooks"].keys()), set(HERDR_EVENTS))
-        self.assertNotIn("PostCompaction", bak["hooks"])
-
-    def test_gate_is_copy_not_symlink(self):
-        self.install()
-        installed = os.path.join(self.prefix, "hooks", "devin-gates.py")
-        self.assertTrue(os.path.isfile(installed))
-        self.assertFalse(os.path.islink(installed))
-        inst_st = os.stat(installed)
-        src_st = os.stat(GATE_SRC)
-        self.assertNotEqual((inst_st.st_ino, inst_st.st_dev), (src_st.st_ino, src_st.st_dev))
-        with open(GATE_SRC, "rb") as fh:
-            src_bytes = fh.read()
-        with open(installed, "rb") as fh:
-            self.assertEqual(fh.read(), src_bytes)
-
-    def test_preexisting_hardlink_is_replaced(self):
-        # tempfile HOME may be another device; hardlink to the repo source needs the same fs.
-        same_fs = tempfile.mkdtemp(
-            prefix="devin-skills-hl-",
-            dir=os.path.dirname(os.path.realpath(ROOT)),
-        )
-        try:
-            prefix = os.path.join(same_fs, "config", "devin")
-            os.makedirs(os.path.join(prefix, "hooks"))
-            shutil.copy(FIXTURE, os.path.join(prefix, "config.json"))
-            os.chmod(os.path.join(prefix, "config.json"), 0o600)
-            installed = os.path.join(prefix, "hooks", "devin-gates.py")
-            os.link(GATE_SRC, installed)
-            src_st = os.stat(GATE_SRC)
-            self.assertEqual(
-                (os.stat(installed).st_ino, os.stat(installed).st_dev),
-                (src_st.st_ino, src_st.st_dev),
-            )
-            old_prefix = self.prefix
-            self.prefix = prefix
-            try:
-                self.install()
-            finally:
-                self.prefix = old_prefix
-            inst_st = os.stat(installed)
-            self.assertNotEqual((inst_st.st_ino, inst_st.st_dev), (src_st.st_ino, src_st.st_dev))
-            self.assertFalse(os.path.islink(installed))
-            with open(installed, "ab") as fh:
-                fh.write(b"\n# mutated dest\n")
-            with open(GATE_SRC, "rb") as fh:
-                self.assertNotIn(b"mutated dest", fh.read())
-        finally:
-            shutil.rmtree(same_fs, ignore_errors=True)
-
     def test_config_json_stays_0600(self):
         path = os.path.join(self.prefix, "config.json")
         self.assertEqual(stat.S_IMODE(os.stat(path).st_mode), 0o600)
         self.install()
         self.assertEqual(stat.S_IMODE(os.stat(path).st_mode), 0o600)
-        self.uninstall()
+        self.inject_gates()
+        os.chmod(path, 0o600)
+        self.install()
         self.assertEqual(stat.S_IMODE(os.stat(path).st_mode), 0o600)
         self.uninstall()
         self.assertEqual(stat.S_IMODE(os.stat(path).st_mode), 0o600)
 
-    def test_install_hash_and_source_realpath(self):
+    def test_does_not_create_state_dir(self):
         self.install()
-        installed = os.path.join(self.prefix, "hooks", "devin-gates.py")
-        hash_path = os.path.join(self.state_dir, "install-hash")
-        src_path = os.path.join(self.state_dir, "source_realpath")
-        self.assertEqual(stat.S_IMODE(os.stat(hash_path).st_mode), 0o600)
-        self.assertEqual(stat.S_IMODE(os.stat(src_path).st_mode), 0o600)
-        with open(hash_path, "r", encoding="utf-8") as fh:
-            recorded = fh.read().strip()
-        self.assertEqual(recorded, sha256_file(installed))
-        with open(src_path, "r", encoding="utf-8") as fh:
-            recorded_src = fh.read().splitlines()[0].strip()
-        self.assertEqual(recorded_src, os.path.realpath(GATE_SRC))
-
-    def test_secret_generated_once_not_overwritten(self):
-        self.install()
-        secret_path = os.path.join(self.state_dir, "secret")
-        self.assertEqual(stat.S_IMODE(os.stat(self.state_dir).st_mode), 0o700)
-        self.assertEqual(stat.S_IMODE(os.stat(secret_path).st_mode), 0o600)
-        with open(secret_path, "rb") as fh:
-            first = fh.read()
-        self.assertEqual(len(first), 32)
-        self.install()
-        with open(secret_path, "rb") as fh:
-            second = fh.read()
-        self.assertEqual(first, second)
+        self.assertFalse(os.path.exists(self.state_dir))
 
     def test_agents_md_span_replace(self):
         agents_path = os.path.join(self.prefix, "AGENTS.md")
@@ -444,8 +376,6 @@ class InstallMergeTest(unittest.TestCase):
 
     def test_skip_missing_skills_and_agents(self):
         src = self.make_src(with_skills=False)
-        self.assertFalse(os.path.isdir(os.path.join(src, "skills")))
-        self.assertFalse(os.path.isdir(os.path.join(src, "agents")))
         proc = self.install(src=src)
         self.assertEqual(proc.returncode, 0)
         self.assertTrue(os.path.isdir(os.path.join(self.prefix, "skills")))
@@ -457,7 +387,7 @@ class InstallMergeTest(unittest.TestCase):
         src = self.make_src(with_skills=True)
         self.install(src=src)
         skill = os.path.join(self.prefix, "skills", "design")
-        agent = os.path.join(self.prefix, "agents", "plan-skeptic.md")
+        agent = os.path.join(self.prefix, "agents", "design-writer.md")
         self.assertTrue(os.path.islink(skill))
         self.assertTrue(os.path.islink(agent))
         self.assertEqual(
@@ -466,11 +396,32 @@ class InstallMergeTest(unittest.TestCase):
         )
         self.assertEqual(
             os.path.realpath(agent),
-            os.path.realpath(os.path.join(src, "agents", "plan-skeptic.md")),
+            os.path.realpath(os.path.join(src, "agents", "design-writer.md")),
         )
         self.uninstall(src=src)
         self.assertFalse(os.path.lexists(skill))
         self.assertFalse(os.path.lexists(agent))
+
+    def test_prunes_retired_skill_and_agent_symlinks(self):
+        src = self.make_src(with_skills=True, extra_agent="plan-skeptic.md")
+        self.install(src=src)
+        stale_skill = os.path.join(self.prefix, "skills", "skeptic-plan")
+        stale_agent = os.path.join(self.prefix, "agents", "plan-skeptic.md")
+        self.assertTrue(os.path.islink(stale_agent))
+        os.makedirs(os.path.join(src, "skills", "skeptic-plan"), exist_ok=True)
+        with open(
+            os.path.join(src, "skills", "skeptic-plan", "SKILL.md"),
+            "w",
+            encoding="utf-8",
+        ) as fh:
+            fh.write("# skeptic-plan\n")
+        os.symlink(os.path.join(src, "skills", "skeptic-plan"), stale_skill)
+        os.remove(os.path.join(src, "agents", "plan-skeptic.md"))
+        shutil.rmtree(os.path.join(src, "skills", "skeptic-plan"))
+        self.install(src=src)
+        self.assertFalse(os.path.lexists(stale_skill))
+        self.assertFalse(os.path.lexists(stale_agent))
+        self.assertTrue(os.path.islink(os.path.join(self.prefix, "skills", "design")))
 
     def test_refuse_clobber_without_force(self):
         src = self.make_src(with_skills=True)
@@ -487,7 +438,10 @@ class InstallMergeTest(unittest.TestCase):
         self.assertEqual(proc.returncode, 0)
         self.assertTrue(os.path.islink(dest))
 
-    def test_purge_deletes_state_dir(self):
+    def test_purge_deletes_leftover_state_dir(self):
+        os.makedirs(self.state_dir)
+        with open(os.path.join(self.state_dir, "secret"), "wb") as fh:
+            fh.write(b"x" * 32)
         self.install()
         self.assertTrue(os.path.isdir(self.state_dir))
         self.uninstall()
@@ -495,41 +449,35 @@ class InstallMergeTest(unittest.TestCase):
         self.uninstall(extra=["--purge"])
         self.assertFalse(os.path.exists(self.state_dir))
 
-    def test_herdr_first_then_gate(self):
-        self.install()
-        cfg = self.config()
-        for event in ("PreToolUse", "PostToolUse", "Stop", "UserPromptSubmit", "SessionStart"):
-            cmds = commands_for_event(cfg, event)
-            self.assertEqual(len(cmds), 2, event)
-            self.assertIn(HERDR_MARK, cmds[0])
-            self.assertIn(GATE_MARK, cmds[1])
-
     def test_live_machine_untouched(self):
         self.install()
         self.uninstall()
         self._assert_live_untouched()
 
-    def test_state_dir_env_override(self):
-        alt = os.path.join(self.tmpdir, "alt-state")
-        self.env["DEVIN_SKILLS_STATE_DIR"] = alt
-        self.install()
-        self.assertTrue(os.path.isfile(os.path.join(alt, "secret")))
-        self.assertFalse(os.path.exists(os.path.join(self.state_dir, "secret")))
-
-    def test_project_install_writes_hooks_v1(self):
-        self.install(extra=["--project"], cwd=self.tmpdir)
+    def test_project_install_links_without_writing_hooks(self):
+        src = self.make_src(with_skills=True)
+        self.install(src=src, extra=["--project"], cwd=self.tmpdir)
         path = os.path.join(self.tmpdir, ".devin", "hooks.v1.json")
-        self.assertTrue(os.path.isfile(path))
-        hooks = load_json(path)
-        self.assertNotIn("hooks", hooks)
-        self.assertNotIn("PermissionRequest", hooks)
-        for event in GATE_EVENTS:
-            self.assertEqual(len(marked(commands_for_event(hooks, event), GATE_MARK)), 1)
-            self.assertEqual(len(marked(commands_for_event(hooks, event), HERDR_MARK)), 0)
+        self.assertFalse(os.path.exists(path))
+        skill = os.path.join(self.tmpdir, ".devin", "skills", "design")
+        self.assertTrue(os.path.islink(skill))
         user = self.config()
         for event in HERDR_EVENTS:
             self.assertEqual(len(marked(commands_for_event(user, event), GATE_MARK)), 0)
-        self.uninstall(extra=["--project"], cwd=self.tmpdir)
+        self.uninstall(src=src, extra=["--project"], cwd=self.tmpdir)
+        self.assertFalse(os.path.lexists(skill))
+
+    def test_project_install_strips_leftover_hooks_v1(self):
+        os.makedirs(os.path.join(self.tmpdir, ".devin"))
+        path = os.path.join(self.tmpdir, ".devin", "hooks.v1.json")
+        dump_json(
+            path,
+            {
+                "PreToolUse": [gate_element("/tmp/devin-gates.py")],
+                "Stop": [gate_element("/tmp/devin-gates.py")],
+            },
+        )
+        self.install(extra=["--project"], cwd=self.tmpdir)
         self.assertFalse(os.path.exists(path))
 
     def test_uninstall_idempotent(self):
@@ -547,128 +495,61 @@ class InstallMergeTest(unittest.TestCase):
         cfg = self.config()
         self.assertEqual(set(cfg["hooks"].keys()), set(HERDR_EVENTS))
 
-    def test_goal_module_installed_and_uninstalled(self):
+    def test_real_repo_links_design_only(self):
         self.install()
-        installed = os.path.join(self.prefix, "hooks", "devin_gates_goal.py")
-        self.assertTrue(os.path.isfile(installed))
-        self.assertFalse(os.path.islink(installed))
-        inst_st = os.stat(installed)
-        src_path = os.path.join(ROOT, "hooks", "devin_gates_goal.py")
-        src_st = os.stat(src_path)
-        self.assertNotEqual((inst_st.st_ino, inst_st.st_dev), (src_st.st_ino, src_st.st_dev))
-        self.assertEqual(sha256_file(installed), sha256_file(src_path))
-        self.uninstall()
-        self.assertFalse(os.path.lexists(installed))
-
-    def test_installed_gate_has_goal_splice_and_module_import(self):
-        self.install()
-        installed = os.path.join(self.prefix, "hooks", "devin-gates.py")
-        with open(installed, "r", encoding="utf-8") as fh:
-            text = fh.read()
-        self.assertIn("devin-skills-goal:begin", text)
-        self.assertIn("import devin_gates_goal", text)
-        # And the installed pair is executable end-to-end.
-        proc = subprocess.run(
-            ["python3", installed, "goal-status"],
-            env=self.env,
-            cwd=self.tmpdir,
-            capture_output=True,
-            text=True,
+        self.assertTrue(os.path.islink(os.path.join(self.prefix, "skills", "design")))
+        self.assertTrue(
+            os.path.islink(os.path.join(self.prefix, "agents", "design-writer.md"))
         )
-        self.assertEqual(proc.returncode, 0, proc.stderr)
-        self.assertIn("goal: none", proc.stdout)
-
-    def test_execplan_files_installed_and_uninstalled(self):
-        self.install()
-        hooks_dir = os.path.join(self.prefix, "hooks")
-        for name, src_rel in (
-            ("devin_gates_execplan.py", "hooks/devin_gates_execplan.py"),
-            (
-                "devin_execplan_validate_plan.py",
-                "skills/execute-plan/scripts/validate-plan.py",
-            ),
-        ):
-            installed = os.path.join(hooks_dir, name)
-            self.assertTrue(os.path.isfile(installed), name)
-            self.assertFalse(os.path.islink(installed), name)
-            inst_st = os.stat(installed)
-            src_st = os.stat(os.path.join(ROOT, src_rel))
-            self.assertNotEqual(
-                (inst_st.st_ino, inst_st.st_dev),
-                (src_st.st_ino, src_st.st_dev),
-            )
-            self.assertEqual(
-                sha256_file(installed), sha256_file(os.path.join(ROOT, src_rel))
-            )
-        self.uninstall()
-        for name in ("devin_gates_execplan.py", "devin_execplan_validate_plan.py"):
-            self.assertFalse(os.path.lexists(os.path.join(hooks_dir, name)))
-
-    def test_installed_gate_has_execplan_splice_and_cli(self):
-        self.install()
-        installed = os.path.join(self.prefix, "hooks", "devin-gates.py")
-        with open(installed, "r", encoding="utf-8") as fh:
-            text = fh.read()
-        self.assertIn("devin-skills-execplan:begin", text)
-        self.assertIn("import devin_gates_execplan", text)
-        env = self.env.copy()
-        env["DEVIN_SESSION_ID"] = "install-test-session"
-        proc = subprocess.run(
-            ["python3", installed, "allow-exec-plan", "--id", "abcd1234"],
-            env=env,
-            cwd=self.tmpdir,
-            capture_output=True,
-            text=True,
+        self.assertTrue(
+            os.path.islink(os.path.join(self.prefix, "agents", "design-reviewer.md"))
         )
-        self.assertEqual(proc.returncode, 0, proc.stderr)
-        self.assertIn("plan_id=abcd1234", proc.stdout)
-        self.assertIn("exec_plan_allow_root=", proc.stdout)
-        proc = subprocess.run(
-            ["python3", installed, "status"],
-            env=env,
-            cwd=self.tmpdir,
-            capture_output=True,
-            text=True,
-        )
-        self.assertEqual(proc.returncode, 0, proc.stderr)
-        self.assertIn("exec-plan: abcd1234", proc.stdout)
-
-    def test_src_without_goal_files_still_installs(self):
-        # A src tree lacking the goal module/patcher installs a gate whose
-        # splice block degrades gracefully (module import swallowed).
-        src = self.make_src()
-        self.install(src=src)
+        skills = set(os.listdir(os.path.join(self.prefix, "skills")))
+        agents = set(os.listdir(os.path.join(self.prefix, "agents")))
+        self.assertEqual(skills, {"design"})
+        self.assertEqual(agents, {"design-writer.md", "design-reviewer.md"})
         self.assertFalse(
-            os.path.exists(os.path.join(self.prefix, "hooks", "devin_gates_goal.py"))
+            os.path.lexists(os.path.join(self.prefix, "skills", "skeptic-plan"))
         )
-        installed = os.path.join(self.prefix, "hooks", "devin-gates.py")
+        self.assertFalse(
+            os.path.lexists(os.path.join(self.prefix, "skills", "goal"))
+        )
+
+
+class SetupDesignTest(unittest.TestCase):
+    def test_prints_id_and_root(self):
+        script = os.path.join(ROOT, "skills", "design", "scripts", "setup-design.py")
+        tmp = tempfile.mkdtemp(prefix="devin-skills-design-")
+        try:
+            env = os.environ.copy()
+            env["XDG_CACHE_HOME"] = tmp
+            proc = subprocess.run(
+                ["python3", script],
+                env=env,
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+            lines = dict(
+                line.split("=", 1) for line in proc.stdout.strip().splitlines() if "=" in line
+            )
+            self.assertRegex(lines["design_id"], r"^[0-9a-f]{8}$")
+            root = lines["design_allow_root"]
+            self.assertTrue(root.startswith(os.path.realpath(tmp)))
+            self.assertTrue(os.path.isdir(root))
+            self.assertEqual(stat.S_IMODE(os.stat(root).st_mode), 0o700)
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_rejects_bad_id(self):
+        script = os.path.join(ROOT, "skills", "design", "scripts", "setup-design.py")
         proc = subprocess.run(
-            ["python3", installed, "status"],
-            env=self.env,
-            cwd=self.tmpdir,
+            ["python3", script, "--id", "nothex"],
             capture_output=True,
             text=True,
         )
-        self.assertEqual(proc.returncode, 0, proc.stderr)
-
-    def test_gate_timeout_and_matcher(self):
-        self.install()
-        cfg = self.config()
-        for event in GATE_EVENTS:
-            elements = cfg["hooks"][event]
-            gate_el = [el for el in elements if has_gates(el)]
-            self.assertEqual(len(gate_el), 1, event)
-            self.assertEqual(gate_el[0].get("matcher"), "")
-            self.assertEqual(gate_el[0]["hooks"][0]["timeout"], 5)
-            self.assertEqual(gate_el[0]["hooks"][0]["type"], "command")
-
-
-def has_gates(element):
-    for hook in element.get("hooks", []):
-        cmd = hook.get("command", "")
-        if GATE_MARK in cmd:
-            return True
-    return False
+        self.assertNotEqual(proc.returncode, 0)
+        self.assertIn("8 lowercase hex", proc.stderr)
 
 
 if __name__ == "__main__":

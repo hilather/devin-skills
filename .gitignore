@@ -1,12 +1,3 @@
-# Gate secret and session state must never be committed
-secret
-state.json
-state.json.tmp
-audit.jsonl
-install-hash
-source_realpath
-sessions/
-
 # Python
 __pycache__/
 *.py[cod]
